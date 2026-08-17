@@ -119,6 +119,26 @@ describe("AppServerProcessManager", () => {
     );
   });
 
+  test("cleans up a child that rejects initialization", async () => {
+    const process = fakeProcess();
+    const terminated: number[] = [];
+    const manager = new AppServerProcessManager(
+      fakePlatform([process], (child) => terminated.push(child.pid)),
+      { version: async () => "codex-cli 1.2.3" },
+    );
+    const starting = manager.start();
+    await waitFor(() => process.outbound.length === 1);
+    await process.send({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32600, message: "incompatible initialize" },
+    });
+
+    await expect(starting).rejects.toThrow("incompatible initialize");
+    expect(terminated).toEqual([77]);
+    expect(manager.snapshot().status).toBe("unavailable");
+  });
+
   test("restarts after an unexpected exit without replaying app requests", async () => {
     const first = fakeProcess();
     const second = fakeProcess();
@@ -140,6 +160,59 @@ describe("AppServerProcessManager", () => {
     expect(second.outbound.map((line) => JSON.parse(line).method)).toEqual(["initialize"]);
     await second.send({ jsonrpc: "2.0", id: 1, result: {} });
     await waitFor(() => manager.snapshot().status === "ready");
+  });
+
+  test("continues bounded backoff across repeated relaunch failures", async () => {
+    const first = fakeProcess();
+    const recovered = fakeProcess();
+    const platform = fakePlatform([first, recovered]);
+    const spawn = platform.spawnAppServer.bind(platform);
+    let attempts = 0;
+    platform.spawnAppServer = (executable, env) => {
+      attempts += 1;
+      if (attempts === 2 || attempts === 3) throw new Error("temporary launch failure");
+      return spawn(executable, env);
+    };
+    const delays: number[] = [];
+    const manager = new AppServerProcessManager(platform, {
+      version: async () => "codex-cli 1.2.3",
+      sleep: async (milliseconds) => { delays.push(milliseconds); },
+    });
+    const firstStart = manager.start();
+    await waitFor(() => first.outbound.length === 1);
+    await first.send({ jsonrpc: "2.0", id: 1, result: {} });
+    await firstStart;
+
+    first.resolveExit(1);
+    await waitFor(() => recovered.outbound.length === 1);
+
+    expect(attempts).toBe(4);
+    expect(delays).toEqual([250, 1_000, 4_000]);
+  });
+
+  test("keeps restart recovery single-flight when a replacement exits during initialize", async () => {
+    const first = fakeProcess();
+    const second = fakeProcess();
+    const recovered = fakeProcess();
+    const unexpected = fakeProcess();
+    const manager = new AppServerProcessManager(
+      fakePlatform([first, second, recovered, unexpected]),
+      { version: async () => "codex-cli 1.2.3", sleep: async () => undefined },
+    );
+    const initial = manager.start();
+    await waitFor(() => first.outbound.length === 1);
+    await first.send({ jsonrpc: "2.0", id: 1, result: {} });
+    await initial;
+
+    first.resolveExit(1);
+    await waitFor(() => second.outbound.length === 1);
+    second.resolveExit(2);
+    await waitFor(() => recovered.outbound.length === 1);
+    await recovered.send({ jsonrpc: "2.0", id: 1, result: {} });
+    await waitFor(() => manager.snapshot().status === "ready");
+    await Bun.sleep(5);
+
+    expect(unexpected.outbound).toEqual([]);
   });
 
   test("forces process-tree cleanup after the graceful shutdown period", async () => {

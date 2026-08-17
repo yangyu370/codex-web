@@ -36,6 +36,7 @@ export class AppServerProcessManager {
   #stderrChunks: Uint8Array[] = [];
   #stderrBytes = 0;
   #startPromise?: Promise<JsonRpcPeer>;
+  #restartPromise?: Promise<void>;
 
   constructor(platform: HostPlatform, options: AppServerProcessManagerOptions = {}) {
     this.#platform = platform;
@@ -127,6 +128,13 @@ export class AppServerProcessManager {
       this.#setSnapshot({ status: "ready", codexVersion });
       return peer;
     } catch (error) {
+      const child = this.#child;
+      this.#peer?.close(new Error("app-server initialization failed"));
+      this.#peer = undefined;
+      this.#child = undefined;
+      if (child) {
+        await this.#platform.terminateProcessTree(child).catch(() => undefined);
+      }
       this.#startPromise = undefined;
       this.#setSnapshot({
         status: "unavailable",
@@ -149,34 +157,32 @@ export class AppServerProcessManager {
       codexVersion: this.#snapshot.codexVersion,
       error: `app-server exited with code ${exitCode}`,
     });
-    const delay = restartDelay(this.#restartAttempt);
-    this.#restartAttempt += 1;
-    await (this.#options.sleep ?? Bun.sleep)(delay);
-    if (this.#intentionalShutdown) {
-      return;
+    if (!this.#restartPromise) {
+      this.#restartPromise = this.#restartUntilReady().finally(() => {
+        this.#restartPromise = undefined;
+      });
     }
-    this.#startPromise = this.#launch();
-    try {
-      await this.#startPromise;
-    } catch {
-      if (!this.#intentionalShutdown && this.#restartAttempt < RESTART_DELAYS_MS.length) {
-        await this.#handleExitAfterLaunchFailure();
-      }
-    }
+    await this.#restartPromise;
   }
 
-  async #handleExitAfterLaunchFailure(): Promise<void> {
-    const delay = restartDelay(this.#restartAttempt);
-    this.#restartAttempt += 1;
-    this.#setSnapshot({
-      status: "restarting",
-      codexVersion: this.#snapshot.codexVersion,
-      error: this.#snapshot.error,
-    });
-    await (this.#options.sleep ?? Bun.sleep)(delay);
-    if (!this.#intentionalShutdown) {
+  async #restartUntilReady(): Promise<void> {
+    while (!this.#intentionalShutdown) {
+      const delay = restartDelay(this.#restartAttempt);
+      this.#restartAttempt += 1;
+      await (this.#options.sleep ?? Bun.sleep)(delay);
+      if (this.#intentionalShutdown) return;
+      this.#setSnapshot({
+        status: "restarting",
+        codexVersion: this.#snapshot.codexVersion,
+        error: this.#snapshot.error,
+      });
       this.#startPromise = this.#launch();
-      await this.#startPromise.catch(() => undefined);
+      try {
+        await this.#startPromise;
+        return;
+      } catch {
+        // Keep retrying with a delay capped at the last backoff value.
+      }
     }
   }
 
@@ -224,14 +230,38 @@ async function readCodexVersion(executable: string): Promise<string> {
     stderr: "pipe",
   });
   const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
+    readStreamBounded(process.stdout, 4_096),
+    readStreamBounded(process.stderr, 4_096),
     process.exited,
   ]);
   if (exitCode !== 0) {
-    throw new Error(stderr.trim() || `Codex --version exited with ${exitCode}`);
+    void stderr;
+    throw new Error(`Codex --version exited with ${exitCode}`);
   }
-  return stdout.trim();
+  const version = stdout.split(/\r?\n/, 1)[0]?.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  if (!version) throw new Error("Codex --version returned no version");
+  return version;
+}
+
+async function readStreamBounded(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let result = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return result + decoder.decode();
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel();
+        throw new Error("Codex --version output exceeded limit");
+      }
+      result += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function environmentStrings(
