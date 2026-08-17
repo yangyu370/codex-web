@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { JsonRpcPeer, type JsonRpcServerRequest } from "./json-rpc";
+import { JsonRpcPeer, JsonRpcResponseError, type JsonRpcServerRequest } from "./json-rpc";
 
 function peerHarness() {
   const inbound = new TransformStream<Uint8Array, Uint8Array>();
@@ -29,6 +29,34 @@ function peerHarness() {
 }
 
 describe("JsonRpcPeer", () => {
+  test("times out bounded adapter requests", async () => {
+    const inbound = new TransformStream<Uint8Array, Uint8Array>();
+    const peer = new JsonRpcPeer(
+      inbound.readable,
+      { write: () => 0, end: () => undefined },
+      { requestTimeoutMs: 1 },
+    );
+
+    await expect(peer.request("model/list", {})).rejects.toThrow("timed out");
+    await inbound.writable.getWriter().close();
+  });
+
+  test("rejects overload before writing beyond the in-flight limit", async () => {
+    const inbound = new TransformStream<Uint8Array, Uint8Array>();
+    const outbound: string[] = [];
+    const peer = new JsonRpcPeer(
+      inbound.readable,
+      { write: (value) => { outbound.push(String(value)); return value.length; }, end: () => undefined },
+      { maxPendingRequests: 1 },
+    );
+
+    const first = peer.request("thread/list", {});
+    await expect(peer.request("model/list", {})).rejects.toMatchObject({ code: -32001 });
+    expect(outbound).toHaveLength(1);
+    peer.close();
+    await expect(first).rejects.toThrow("transport closed");
+  });
+
   test("correlates responses while forwarding notifications", async () => {
     const harness = peerHarness();
     const notifications: unknown[] = [];
@@ -53,6 +81,23 @@ describe("JsonRpcPeer", () => {
       { method: "thread/started", params: { thread: { id: "t1" } } },
     ]);
     await harness.close();
+  });
+
+  test("preserves bounded JSON-RPC error metadata for compatibility classification", async () => {
+    const harness = peerHarness();
+    const response = harness.peer.request("model/list", {});
+    await harness.send({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32601, message: "Method not found", data: { field: "model/list" } },
+    });
+
+    await expect(response).rejects.toMatchObject({
+      name: "JsonRpcResponseError",
+      code: -32601,
+      message: "Method not found",
+      data: { field: "model/list" },
+    } satisfies Partial<JsonRpcResponseError>);
   });
 
   test("surfaces server-initiated approval requests and writes responses", async () => {
