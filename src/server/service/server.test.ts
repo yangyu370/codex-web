@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 
 import type { RemoteAuthConfig } from "../auth/config";
 import type { ServerMessage } from "../../shared/protocol";
@@ -24,8 +27,8 @@ const remoteAuth: RemoteAuthConfig = {
   origins: ["https://codex.example.com"],
 };
 
-function request(path: string, origin?: string, token?: string): Request {
-  return new Request(`http://127.0.0.1:4173${path}`, {
+function request(urlPath: string, origin?: string, token?: string): Request {
+  return new Request(`http://127.0.0.1:4173${urlPath}`, {
     headers: {
       ...(origin ? { Origin: origin } : {}),
       ...(token ? { "Cf-Access-Jwt-Assertion": token } : {}),
@@ -34,6 +37,16 @@ function request(path: string, origin?: string, token?: string): Request {
 }
 
 describe("web request authentication", () => {
+  let staticRoot = "";
+  beforeAll(async () => {
+    staticRoot = await mkdtemp(nodePath.join(tmpdir(), "codex-web-static-"));
+    await Bun.write(nodePath.join(staticRoot, "index.html"), "<main>Codex Web</main>");
+    await Bun.write(nodePath.join(staticRoot, "app.js"), "console.log('ready')");
+  });
+  afterAll(async () => {
+    await rm(staticRoot, { recursive: true, force: true });
+  });
+
   test("keeps healthz public and free of service details", async () => {
     const state = new WebState("macos");
     const handler = createWebRequestHandler({ auth: localAuth, state });
@@ -80,6 +93,34 @@ describe("web request authentication", () => {
     ).toBe(200);
   });
 
+  test("remote mode accepts top-level navigation using the public request origin", async () => {
+    const state = new WebState("macos");
+    const handler = createWebRequestHandler({
+      auth: remoteAuth,
+      state,
+      verifyRemote: async () => undefined,
+    });
+    const response = await handler(new Request("https://codex.example.com/api/bootstrap", {
+      headers: { "Cf-Access-Jwt-Assertion": "valid-token" },
+    }));
+
+    expect(response.status).toBe(200);
+  });
+
+  test("remote mode recognizes the configured HTTPS origin behind a tunnel", async () => {
+    const state = new WebState("macos");
+    const handler = createWebRequestHandler({ auth: remoteAuth, state, verifyRemote: async () => undefined });
+    const response = await handler(new Request("http://codex.example.com/api/bootstrap", {
+      headers: {
+        "Cf-Access-Jwt-Assertion": "valid-token",
+        "X-Forwarded-Proto": "https",
+        Host: "codex.example.com",
+      },
+    }));
+
+    expect(response.status).toBe(200);
+  });
+
   test("readyz reports app-server readiness without leaking diagnostics", async () => {
     const state = new WebState("windows");
     state.setService({ status: "ready", codexVersion: "codex-cli 1.2.3" });
@@ -88,6 +129,62 @@ describe("web request authentication", () => {
       request("/api/readyz", "http://127.0.0.1:4173"),
     );
     expect(await response.json()).toEqual({ status: "ready" });
+  });
+
+  test("serves built assets and the SPA fallback after authorization", async () => {
+    const state = new WebState("macos");
+    const handler = createWebRequestHandler({ auth: localAuth, state, staticRoot });
+    const asset = await handler(request("/app.js", "http://127.0.0.1:4173"));
+    const route = await handler(request("/threads/t1", "http://127.0.0.1:4173"));
+
+    expect(asset.headers.get("Content-Type")).toContain("javascript");
+    expect(await route.text()).toBe("<main>Codex Web</main>");
+  });
+
+  test("exposes authenticated non-secret settings", async () => {
+    const state = new WebState("macos");
+    let saved: unknown;
+    const handler = createWebRequestHandler({
+      auth: localAuth,
+      state,
+      settings: {
+        read: async () => ({ recentDirectories: ["/work"] }),
+        save: async (value) => { saved = value; },
+      },
+    });
+    const get = await handler(request("/api/settings", "http://127.0.0.1:4173"));
+    const put = await handler(new Request("http://127.0.0.1:4173/api/settings", {
+      method: "PUT",
+      headers: { Origin: "http://127.0.0.1:4173", "Content-Type": "application/json" },
+      body: JSON.stringify({ recentDirectories: ["/next"], model: "gpt-5.6" }),
+    }));
+
+    expect(await get.json()).toEqual({ recentDirectories: ["/work"] });
+    expect(put.status).toBe(204);
+    expect(saved).toEqual({ recentDirectories: ["/next"], model: "gpt-5.6" });
+  });
+
+  test("rejects an oversized settings body even when content-length is misleading", async () => {
+    const state = new WebState("macos");
+    const handler = createWebRequestHandler({
+      auth: localAuth,
+      state,
+      settings: {
+        read: async () => ({ recentDirectories: [] }),
+        save: async () => undefined,
+      },
+    });
+    const response = await handler(new Request("http://127.0.0.1:4173/api/settings", {
+      method: "PUT",
+      headers: {
+        Origin: "http://127.0.0.1:4173",
+        "Content-Type": "application/json",
+        "Content-Length": "0",
+      },
+      body: JSON.stringify({ recentDirectories: ["x".repeat(20_000)] }),
+    }));
+
+    expect(response.status).toBe(413);
   });
 });
 
