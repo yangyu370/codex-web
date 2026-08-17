@@ -18,7 +18,7 @@ export interface BrowserActions {
   readThread(threadId: string): Promise<unknown>;
   startTurn(threadId: string, text: string): Promise<unknown>;
   interruptTurn(threadId: string, turnId: string): Promise<unknown>;
-  resolveApproval(id: string, decision: string): void;
+  resolveApproval(id: string, decision: string, deviceId: string): void;
 }
 
 export interface BrowserGatewayOptions {
@@ -73,7 +73,7 @@ export class BrowserGateway {
     return () => this.#connections.delete(send);
   }
 
-  async handleMessage(source: string, send: Send): Promise<void> {
+  async handleMessage(source: string, send: Send, deviceId = "browser"): Promise<void> {
     let request: BrowserRequest;
     try {
       request = parseClientMessage(source);
@@ -82,14 +82,14 @@ export class BrowserGateway {
       return;
     }
     try {
-      const result = await this.#dispatch(request);
+      const result = await this.#dispatch(request, deviceId);
       send({ kind: "response", id: request.id, result });
     } catch (error) {
       send(errorResponse(request.id, error));
     }
   }
 
-  async #dispatch(request: BrowserRequest): Promise<unknown> {
+  async #dispatch(request: BrowserRequest, deviceId: string): Promise<unknown> {
     switch (request.method) {
       case "model.list":
         return this.#actions.models();
@@ -118,6 +118,7 @@ export class BrowserGateway {
         this.#actions.resolveApproval(
           requiredString(request.params, "approvalId"),
           requiredString(request.params, "decision"),
+          deviceId,
         );
         return {};
     }
@@ -135,6 +136,9 @@ export class BrowserGateway {
         const removed = this.#events.shift();
         if (removed) this.#eventBytes -= removed.bytes;
       }
+    } else {
+      this.#events.splice(0);
+      this.#eventBytes = 0;
     }
     for (const connection of this.#connections) {
       connection(structuredClone(event));
@@ -161,7 +165,11 @@ function errorResponse(id: string, error: unknown): BrowserResponse {
     error: {
       code,
       message: safeMessage(code),
-      retryable: code === "notReady" || code === "codexUnavailable",
+      retryable:
+        code === "notReady" ||
+        code === "codexUnavailable" ||
+        (code === "codexRejected" && message.includes("retryable")),
+      diagnosticId: crypto.randomUUID(),
     },
   };
 }

@@ -1,10 +1,15 @@
-import type { JsonRpcNotification, JsonRpcServerRequest } from "./json-rpc";
+import {
+  JsonRpcResponseError,
+  type JsonRpcNotification,
+  type JsonRpcServerRequest,
+} from "./json-rpc";
 import type { WebState } from "../service/state";
 import type { ValidatedPath } from "../platform";
 import {
   decodeModelList,
   decodeThreadEnvelope,
   decodeThreadList,
+  decodeTurns,
   optionalString,
   record,
 } from "./decoders";
@@ -12,8 +17,10 @@ import {
 export interface RpcClient {
   request(method: string, params: unknown): Promise<unknown>;
   respond(id: string | number, result: unknown): void;
+  respondError?(id: string | number, error: { code: number; message: string }): void;
   onNotification(listener: (notification: JsonRpcNotification) => void): () => void;
   onServerRequest(listener: (request: JsonRpcServerRequest) => void): () => void;
+  onProtocolError?(listener: (error: Error) => void): () => void;
 }
 
 export interface WorkingDirectoryValidator {
@@ -34,10 +41,15 @@ export class CodexAdapter {
     this.#state = state;
     this.#platform = platform;
     rpc.onNotification((notification) => state.applyNotification(notification));
+    rpc.onProtocolError?.((error) => state.addDiagnostic(error.message));
     rpc.onServerRequest((request) => {
       try {
         state.addApproval(request);
       } catch (error) {
+        rpc.respondError?.(request.id, {
+          code: -32001,
+          message: "Codex Web could not retain this approval request",
+        });
         state.addDiagnostic(
           `${request.method}: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -46,7 +58,7 @@ export class CodexAdapter {
   }
 
   async models(): Promise<ReturnType<typeof decodeModelList>> {
-    const models = decodeModelList(await this.#rpc.request("model/list", {}));
+    const models = decodeModelList(await this.#request("model/list", {}));
     this.#state.setModels(models);
     return models;
   }
@@ -56,10 +68,10 @@ export class CodexAdapter {
     nextCursor: string | null;
   }> {
     const response = decodeThreadList(
-      await this.#rpc.request("thread/list", {
+      await this.#request("thread/list", {
         limit: 100,
         ...(cursor ? { cursor } : {}),
-        sortKey: "updatedAt",
+        sortKey: "updated_at",
         sortDirection: "desc",
       }),
     );
@@ -76,20 +88,56 @@ export class CodexAdapter {
     }
     const cwd = await this.#platform.validateWorkingDirectory(params.cwd);
     const decoded = decodeThreadEnvelope(
-      await this.#rpc.request("thread/start", {
+      await this.#request("thread/start", {
         cwd: cwd.resolvedPath,
         ...(params.model ? { model: params.model } : {}),
       }),
     );
-    this.#state.upsertThread(decoded.thread);
-    this.#state.loadThread(decoded.thread.id, decoded.items);
-    return decoded.thread;
+    const thread = { ...decoded.thread, cwd: cwd.displayPath };
+    this.#state.upsertThread(thread);
+    this.#state.loadThread(thread.id, decoded.items);
+    return thread;
   }
 
   async resumeThread(
     threadId: string,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
-    return this.#loadThread("thread/resume", { threadId });
+    try {
+      const response = record(await this.#request("thread/resume", {
+        threadId,
+        excludeTurns: true,
+        initialTurnsPage: { limit: 10, sortDirection: "desc", itemsView: "full" },
+      }), "thread/resume response");
+      const rawThread = record(response.thread, "thread/resume response.thread");
+      const decoded = decodeThreadEnvelope({ thread: rawThread });
+      let items: ReturnType<typeof decodeTurns> = [];
+      let pageValue: unknown = response.initialTurnsPage;
+      let pages = 0;
+      const seenCursors = new Set<string>();
+      while (pageValue !== undefined && pageValue !== null && pages < 50) {
+        const page = record(pageValue, "thread/turns/list response");
+        const turns = Array.isArray(page.data) ? page.data : [];
+        const pageItems = decodeTurns([...turns].reverse());
+        items = [...pageItems, ...items].slice(-500);
+        const cursor = optionalString(page.nextCursor);
+        if (!cursor || seenCursors.has(cursor) || items.length >= 500) break;
+        seenCursors.add(cursor);
+        pageValue = await this.#request("thread/turns/list", {
+          threadId,
+          cursor,
+          limit: 10,
+          sortDirection: "desc",
+          itemsView: "full",
+        });
+        pages += 1;
+      }
+      this.#state.upsertThread(decoded.thread);
+      this.#state.loadThread(decoded.thread.id, items);
+      return decoded.thread;
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("compatibilityError:")) throw error;
+      return this.#loadThread("thread/resume", { threadId });
+    }
   }
 
   async readThread(
@@ -106,7 +154,7 @@ export class CodexAdapter {
       throw new Error("invalidRequest: turn text is empty");
     }
     const response = record(
-      await this.#rpc.request("turn/start", {
+      await this.#request("turn/start", {
         threadId,
         input: [{ type: "text", text }],
       }),
@@ -125,11 +173,12 @@ export class CodexAdapter {
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<unknown> {
-    return this.#rpc.request("turn/interrupt", { threadId, turnId });
+    await this.#request("turn/interrupt", { threadId, turnId });
+    return {};
   }
 
-  resolveApproval(id: string, decision: string): void {
-    const approval = this.#state.claimApproval(id, decision);
+  resolveApproval(id: string, decision: string, deviceId = "browser"): void {
+    const approval = this.#state.claimApproval(id, decision, deviceId);
     if (
       approval.method === "item/commandExecution/requestApproval" ||
       approval.method === "item/fileChange/requestApproval"
@@ -156,9 +205,39 @@ export class CodexAdapter {
     method: "thread/resume" | "thread/read",
     params: Record<string, unknown>,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
-    const decoded = decodeThreadEnvelope(await this.#rpc.request(method, params));
+    const decoded = decodeThreadEnvelope(await this.#request(method, params));
     this.#state.upsertThread(decoded.thread);
     this.#state.loadThread(decoded.thread.id, decoded.items);
     return decoded.thread;
+  }
+
+  async #request(method: string, params: unknown): Promise<unknown> {
+    try {
+      return await this.#rpc.request(method, params);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.#state.addDiagnostic(`${method}: ${message}`);
+      const lower = message.toLowerCase();
+      if (
+        (error instanceof JsonRpcResponseError && (error.code === -32601 || error.code === -32602)) ||
+        lower.includes("method not found") ||
+        lower.includes("unknown method") ||
+        lower.includes("unknown variant")
+      ) {
+        throw new Error(`compatibilityError: ${method}`);
+      }
+      if (error instanceof JsonRpcResponseError && error.code === -32001) {
+        throw new Error(`codexRejected: retryable overload in ${method}`);
+      }
+      if (
+        lower.includes("transport is closed") ||
+        lower.includes("stdout closed") ||
+        lower.includes("app-server exited") ||
+        lower.includes("app-server stopped")
+      ) {
+        throw new Error(`interrupted: ${method}`);
+      }
+      throw new Error(`codexRejected: ${method}`);
+    }
   }
 }

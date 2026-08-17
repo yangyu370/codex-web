@@ -74,6 +74,25 @@ describe("BrowserGateway", () => {
     ]);
   });
 
+  test("returns safe typed errors with a diagnostic id", async () => {
+    const state = new WebState("macos");
+    const gateway = new BrowserGateway(state, actions());
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(request("turn.start", {}), (message) => sent.push(message));
+
+    expect(sent[0]).toMatchObject({
+      kind: "response",
+      id: "r1",
+      error: {
+        code: "invalidRequest",
+        message: "The request is invalid.",
+        retryable: false,
+        diagnosticId: expect.any(String),
+      },
+    });
+  });
+
   test("replays retained events and falls back to a snapshot after expiry", () => {
     const state = new WebState("macos");
     const gateway = new BrowserGateway(state, actions(), {
@@ -96,6 +115,19 @@ describe("BrowserGateway", () => {
     expect(expired).toEqual([state.snapshot()]);
   });
 
+  test("falls back to a snapshot when an oversized event creates a replay gap", () => {
+    const state = new WebState("macos");
+    const gateway = new BrowserGateway(state, actions(), { maxBytes: 200 });
+    state.setModels([{ id: "small", displayName: "Small" }]);
+    const beforeOversized = state.snapshot().sequence;
+    state.setModels([{ id: "large", displayName: "x".repeat(1_000) }]);
+    const sent: ServerMessage[] = [];
+
+    gateway.connect((message) => sent.push(message), beforeOversized);
+
+    expect(sent).toEqual([state.snapshot()]);
+  });
+
   test("returns alreadyResolved to the second approval decision", async () => {
     const state = new WebState("windows");
     const approval = state.addApproval({
@@ -106,8 +138,8 @@ describe("BrowserGateway", () => {
     const gateway = new BrowserGateway(
       state,
       actions({
-        resolveApproval: (id, decision) => {
-          state.claimApproval(id, decision);
+        resolveApproval: (id, decision, deviceId) => {
+          state.claimApproval(id, decision, deviceId);
         },
       }),
     );
@@ -118,12 +150,13 @@ describe("BrowserGateway", () => {
       decision: "accept",
     });
 
-    await gateway.handleMessage(message, (value) => first.push(value));
-    await gateway.handleMessage(message, (value) => second.push(value));
+    await gateway.handleMessage(message, (value) => first.push(value), "device-one");
+    await gateway.handleMessage(message, (value) => second.push(value), "device-two");
     expect(first.at(-1)).toMatchObject({ kind: "response", result: {} });
     expect(second.at(-1)).toMatchObject({
       kind: "response",
       error: { code: "alreadyResolved" },
     });
+    expect(state.approvalAudit()[0]?.deviceId).toBe("device-one");
   });
 });

@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import type { JsonRpcNotification, JsonRpcServerRequest } from "./json-rpc";
 import { CodexAdapter, type RpcClient } from "./adapter";
-import { decodeModelList, decodeThread } from "./decoders";
+import { decodeHistoryItem, decodeModelList, decodeThread } from "./decoders";
 import { WebState } from "../service/state";
 
 class ExpectedRpcClient implements RpcClient {
   #notification?: (notification: JsonRpcNotification) => void;
   #serverRequest?: (request: JsonRpcServerRequest) => void;
+  #protocolError?: (error: Error) => void;
   readonly responses: Array<{ id: string | number; result: unknown }> = [];
 
   constructor(
@@ -28,7 +29,7 @@ class ExpectedRpcClient implements RpcClient {
         new Error(`unexpected params ${JSON.stringify(params)}`),
       );
     }
-    return Promise.resolve(this.result);
+    return this.result instanceof Error ? Promise.reject(this.result) : Promise.resolve(this.result);
   }
 
   respond(id: string | number, result: unknown): void {
@@ -45,12 +46,21 @@ class ExpectedRpcClient implements RpcClient {
     return () => undefined;
   }
 
+  onProtocolError(listener: (error: Error) => void): () => void {
+    this.#protocolError = listener;
+    return () => undefined;
+  }
+
   emitNotification(notification: JsonRpcNotification): void {
     this.#notification?.(notification);
   }
 
   emitServerRequest(request: JsonRpcServerRequest): void {
     this.#serverRequest?.(request);
+  }
+
+  emitProtocolError(error: Error): void {
+    this.#protocolError?.(error);
   }
 }
 
@@ -107,6 +117,20 @@ describe("tolerant decoders", () => {
     expect(() => decodeThread({ preview: "missing id" })).toThrow(
       "compatibilityError: thread.id",
     );
+  });
+
+  test("bounds oversized content reconstructed from durable history", () => {
+    const item = decodeHistoryItem({
+      id: "history-command",
+      type: "commandExecution",
+      command: "build",
+      aggregatedOutput: `old${"x".repeat(300_000)}new`,
+      status: "completed",
+    });
+
+    expect(item).toMatchObject({ type: "command", truncated: true });
+    if (item?.type !== "command") throw new Error("command item missing");
+    expect(new TextEncoder().encode(item.output).byteLength).toBeLessThanOrEqual(262_144);
   });
 });
 
@@ -166,6 +190,31 @@ describe("WebState", () => {
     );
   });
 
+  test("bounds oversized content present in an initial item notification", () => {
+    const state = new WebState("windows");
+    state.applyNotification({
+      method: "item/started",
+      params: {
+        threadId: "t1",
+        turnId: "turn1",
+        item: {
+          id: "command-initial",
+          type: "commandExecution",
+          command: "build",
+          aggregatedOutput: `old${"x".repeat(300_000)}new`,
+          status: "inProgress",
+        },
+      },
+    });
+
+    const item = state.snapshot().visibleItems[0];
+    expect(item).toMatchObject({ type: "command", truncated: true });
+    if (item?.type !== "command") throw new Error("command item missing");
+    expect(new TextEncoder().encode(item.output).byteLength).toBeLessThanOrEqual(262_144);
+    expect(item.output).not.toContain("old");
+    expect(item.output).toEndWith("new");
+  });
+
   test("claims an approval once and reports later decisions as already resolved", () => {
     const state = new WebState("windows");
     const approval = state.addApproval({
@@ -187,9 +236,166 @@ describe("WebState", () => {
     });
     expect(() => state.claimApproval(approval.id, "decline")).toThrow("alreadyResolved");
   });
+
+  test("interrupts active work and pending approvals after app-server exit", () => {
+    const state = new WebState("macos");
+    state.applyNotification({
+      method: "turn/started",
+      params: { threadId: "t1", turn: { id: "turn1" } },
+    });
+    state.addApproval({
+      id: 9,
+      method: "item/commandExecution/requestApproval",
+      params: { threadId: "t1", turnId: "turn1" },
+    });
+
+    state.interruptActiveWork();
+
+    expect(state.snapshot()).toMatchObject({
+      activeTurn: { id: "turn1", threadId: "t1", status: "interrupted" },
+      pendingApprovals: [],
+    });
+  });
+
+  test("removes an approval when app-server resolves the server request", () => {
+    const state = new WebState("macos");
+    state.addApproval({
+      id: 9,
+      method: "item/commandExecution/requestApproval",
+      params: { threadId: "t1", turnId: "turn1" },
+    });
+
+    state.applyNotification({
+      method: "serverRequest/resolved",
+      params: { threadId: "t1", requestId: 9 },
+    });
+
+    expect(state.snapshot().pendingApprovals).toEqual([]);
+  });
+
+  test("bounds live reasoning summaries", () => {
+    const state = new WebState("macos");
+    state.applyNotification({
+      method: "item/completed",
+      params: {
+        threadId: "t1",
+        turnId: "turn1",
+        item: { id: "reasoning1", type: "reasoning", summary: ["x".repeat(300_000)] },
+      },
+    });
+
+    const item = state.snapshot().visibleItems[0];
+    expect(item).toMatchObject({ id: "reasoning1", type: "status", truncated: true });
+    if (item?.type !== "status") throw new Error("status item missing");
+    expect(new TextEncoder().encode(item.text).byteLength).toBeLessThanOrEqual(262_144);
+  });
+
+  test("applies current file patch and turn error notifications", () => {
+    const state = new WebState("macos");
+    state.applyNotification({
+      method: "item/fileChange/patchUpdated",
+      params: {
+        threadId: "t1",
+        turnId: "turn1",
+        itemId: "patch1",
+        changes: [{ path: "/work/a.ts", kind: "update", diff: "+fixed" }],
+      },
+    });
+    state.applyNotification({
+      method: "error",
+      params: {
+        threadId: "t1",
+        turnId: "turn1",
+        willRetry: false,
+        error: { message: "model failed" },
+      },
+    });
+
+    expect(state.snapshot()).toMatchObject({
+      activeTurn: { id: "turn1", threadId: "t1", status: "failed" },
+      visibleItems: [
+        { id: "patch1", type: "fileChange", diff: "+fixed" },
+        { id: "error:turn1", type: "status", text: "model failed" },
+      ],
+    });
+  });
+
+  test("records bounded approval decisions without request payloads", () => {
+    const state = new WebState("windows");
+    const events: unknown[] = [];
+    state.onEvent((event) => events.push(event));
+    const approval = state.addApproval({
+      id: 12,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "t1",
+        turnId: "turn1",
+        command: "shown",
+        privateNativeField: "secret",
+      },
+    });
+    state.claimApproval(approval.id, "accept", "device-7");
+
+    expect(state.approvalAudit()).toEqual([
+      {
+        approvalId: approval.id,
+        decision: "accept",
+        deviceId: "device-7",
+        threadId: "t1",
+        turnId: "turn1",
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(JSON.stringify(state.approvalAudit())).not.toContain("secret");
+    expect(JSON.stringify(events)).not.toContain("secret");
+  });
+
+  test("bounds each protocol diagnostic as well as the diagnostic count", () => {
+    const state = new WebState("macos");
+    state.addDiagnostic(`old${"x".repeat(20_000)}new`);
+
+    const diagnostic = state.diagnostics()[0] ?? "";
+    expect(new TextEncoder().encode(diagnostic).byteLength).toBeLessThanOrEqual(16_384);
+    expect(diagnostic).not.toContain("old");
+    expect(diagnostic).toEndWith("new");
+  });
+
+  test("evicts old items to enforce an aggregate snapshot budget", () => {
+    const state = new WebState("macos");
+    state.loadThread("t1", Array.from({ length: 30 }, (_, index) => ({
+      id: `item-${index}`,
+      type: "message" as const,
+      role: "assistant" as const,
+      text: "x".repeat(262_000),
+    })));
+
+    const snapshot = state.snapshot();
+    expect(snapshot.visibleItems.length).toBeLessThan(30);
+    expect(new TextEncoder().encode(JSON.stringify(snapshot)).byteLength).toBeLessThan(7_340_032);
+  });
 });
 
 describe("CodexAdapter", () => {
+  test("retains transport protocol errors only in bounded diagnostics", () => {
+    const rpc = new ExpectedRpcClient("unused", {});
+    const state = new WebState("macos");
+    new CodexAdapter(rpc, state);
+
+    rpc.emitProtocolError(new Error("malformed JSON-RPC line"));
+
+    expect(state.diagnostics()).toEqual(["malformed JSON-RPC line"]);
+    expect(state.snapshot().visibleItems).toEqual([]);
+  });
+
+  test("scopes unsupported native methods to a compatibility error", async () => {
+    const rpc = new ExpectedRpcClient("model/list", new Error("Method not found"));
+    const state = new WebState("macos");
+    const adapter = new CodexAdapter(rpc, state);
+
+    await expect(adapter.models()).rejects.toThrow("compatibilityError: model/list");
+    expect(state.diagnostics()).toEqual(["model/list: Method not found"]);
+  });
+
   test("maps model/list into the shared model catalog", async () => {
     const rpc = new ExpectedRpcClient("model/list", {
       data: [
@@ -217,19 +423,23 @@ describe("CodexAdapter", () => {
   });
 
   test("maps thread/list and returns normalized summaries", async () => {
-    const rpc = new ExpectedRpcClient("thread/list", {
-      data: [
-        {
-          id: "t1",
-          preview: "Ship the web UI",
-          createdAt: 10,
-          updatedAt: 11,
-          cwd: "/work",
-          status: { type: "idle" },
-        },
-      ],
-      nextCursor: null,
-    });
+    const rpc = new ExpectedRpcClient(
+      "thread/list",
+      {
+        data: [
+          {
+            id: "t1",
+            preview: "Ship the web UI",
+            createdAt: 10,
+            updatedAt: 11,
+            cwd: "/work",
+            status: { type: "idle" },
+          },
+        ],
+        nextCursor: null,
+      },
+      { limit: 100, sortKey: "updated_at", sortDirection: "desc" },
+    );
     const state = new WebState("macos");
     const adapter = new CodexAdapter(rpc, state);
 
@@ -292,7 +502,8 @@ describe("CodexAdapter", () => {
 
     await expect(
       adapter.startThread({ cwd: "/alias/work", model: "gpt-5.6" }),
-    ).resolves.toMatchObject({ id: "t2", cwd: "/real/work" });
+    ).resolves.toMatchObject({ id: "t2", cwd: "/alias/work" });
+    expect(state.snapshot().threads[0]?.cwd).toBe("/alias/work");
     expect(state.snapshot().loadedThreadId).toBe("t2");
   });
 
@@ -307,7 +518,10 @@ describe("CodexAdapter", () => {
           updatedAt: 2,
           cwd: "/work",
           status: { type: "idle" },
-          turns: [
+          turns: [],
+        },
+        initialTurnsPage: {
+          data: [
             {
               id: "turn1",
               status: "completed",
@@ -320,9 +534,14 @@ describe("CodexAdapter", () => {
               ],
             },
           ],
+          nextCursor: null,
         },
       },
-      { threadId: "t1" },
+      {
+        threadId: "t1",
+        excludeTurns: true,
+        initialTurnsPage: { limit: 10, sortDirection: "desc", itemsView: "full" },
+      },
     );
     const state = new WebState("macos");
     const adapter = new CodexAdapter(rpc, state);
@@ -381,7 +600,7 @@ describe("CodexAdapter", () => {
 
     const interruptRpc = new ExpectedRpcClient(
       "turn/interrupt",
-      {},
+      { rawNativeField: "must not reach browser" },
       { threadId: "t1", turnId: "turn2" },
     );
     const interruptAdapter = new CodexAdapter(interruptRpc, state);
