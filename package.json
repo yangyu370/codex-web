@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "bun scripts/dev-server.ts",
     "build": "vite build",
+    "start": "bun src/server/index.ts",
+    "test:e2e": "playwright test",
+    "test:smoke": "bun tests/smoke/native.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
@@ -21,6 +25,7 @@
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.11.2",
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.4",
