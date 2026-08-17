@@ -87,6 +87,22 @@ describe("working-directory validation", () => {
     });
   });
 
+  test("Windows rejects root-relative paths before filesystem access", async () => {
+    let accessCount = 0;
+    const platform = createWindowsPlatform(runtime({
+      homedir: "C:\\Users\\tester",
+      access: async () => { accessCount += 1; },
+    }));
+
+    await expect(platform.validateWorkingDirectory("\\work")).rejects.toMatchObject({
+      code: "invalidWorkingDirectory",
+    });
+    await expect(platform.resolveCodexExecutable("\\bin\\codex.exe")).rejects.toMatchObject({
+      code: "codexUnavailable",
+    });
+    expect(accessCount).toBe(0);
+  });
+
   test("rejects a path that is not a directory", async () => {
     const platform = createMacPlatform(runtime({ isDirectory: async () => false }));
     await expect(platform.validateWorkingDirectory("/tmp/file.txt")).rejects.toMatchObject({

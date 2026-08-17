@@ -13,7 +13,7 @@ export function createWindowsPlatform(runtime: PlatformRuntime): HostPlatform {
 
     async resolveCodexExecutable(configuredPath) {
       const executable = configuredPath ?? (await runtime.resolveOnPath("codex.exe"));
-      if (!path.win32.isAbsolute(executable)) {
+      if (!isFullyQualifiedWindowsPath(executable)) {
         throw new PlatformError("codexUnavailable", "Codex executable must be absolute");
       }
       try {
@@ -25,7 +25,7 @@ export function createWindowsPlatform(runtime: PlatformRuntime): HostPlatform {
     },
 
     async validateWorkingDirectory(input) {
-      if (!path.win32.isAbsolute(input)) {
+      if (!isFullyQualifiedWindowsPath(input)) {
         throw new PlatformError(
           "invalidWorkingDirectory",
           "Windows working directory must be drive-letter or UNC absolute",
@@ -65,4 +65,8 @@ export function createWindowsPlatform(runtime: PlatformRuntime): HostPlatform {
       return { platform: "windows", arch: runtime.arch };
     },
   };
+}
+
+function isFullyQualifiedWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value);
 }
