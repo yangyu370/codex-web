@@ -22,6 +22,8 @@ export interface CodexWebClientOptions {
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
+export type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "closed";
+
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
@@ -32,10 +34,12 @@ export class CodexWebClient {
   readonly #factory: (url: string) => SocketLike;
   readonly #options: Required<CodexWebClientOptions>;
   readonly #pending = new Map<string, PendingRequest>();
+  readonly #connectionListeners = new Set<(status: ConnectionStatus) => void>();
   #socket?: SocketLike;
   #nextRequestId = 1;
   #reconnectAttempt = 0;
   #closed = false;
+  #connectionStatus: ConnectionStatus = "closed";
 
   constructor(
     initialSnapshot: BrowserSnapshot,
@@ -53,11 +57,13 @@ export class CodexWebClient {
 
   connect(): void {
     this.#closed = false;
+    this.#setConnection("connecting");
     const sequence = this.getSnapshot().sequence;
     const socket = this.#factory(`/ws?after=${sequence}`);
     this.#socket = socket;
     socket.onopen = () => {
       this.#reconnectAttempt = 0;
+      this.#setConnection("connected");
     };
     socket.onmessage = (event) => this.#receive(event.data);
     socket.onerror = () => undefined;
@@ -65,7 +71,10 @@ export class CodexWebClient {
       if (socket !== this.#socket) return;
       this.#socket = undefined;
       this.#rejectPending(new Error("interrupted: connection closed"));
-      if (!this.#closed) void this.#reconnect();
+      if (!this.#closed) {
+        this.#setConnection("reconnecting");
+        void this.#reconnect();
+      }
     };
   }
 
@@ -74,6 +83,7 @@ export class CodexWebClient {
     this.#socket?.close();
     this.#socket = undefined;
     this.#rejectPending(new Error("interrupted: connection closed"));
+    this.#setConnection("closed");
   }
 
   getSnapshot(): BrowserSnapshot {
@@ -82,6 +92,15 @@ export class CodexWebClient {
 
   subscribe(listener: (snapshot: BrowserSnapshot) => void): () => void {
     return this.store.subscribe((state) => listener(state.snapshot));
+  }
+
+  connectionStatus(): ConnectionStatus {
+    return this.#connectionStatus;
+  }
+
+  subscribeConnection(listener: (status: ConnectionStatus) => void): () => void {
+    this.#connectionListeners.add(listener);
+    return () => this.#connectionListeners.delete(listener);
   }
 
   request(method: BrowserMethod, params: Record<string, unknown>): Promise<unknown> {
@@ -170,6 +189,24 @@ export class CodexWebClient {
         ...next,
         pendingApprovals: next.pendingApprovals.filter((entry) => entry.id !== id),
       };
+    } else if (event.type === "approvals.interrupted") {
+      next = { ...next, pendingApprovals: [] };
+    } else if (event.type === "work.updated") {
+      const item = isRecord(payload.item)
+        ? payload.item as unknown as BrowserSnapshot["visibleItems"][number]
+        : undefined;
+      const thread = isRecord(payload.thread)
+        ? payload.thread as unknown as BrowserSnapshot["threads"][number]
+        : undefined;
+      next = {
+        ...next,
+        ...(typeof payload.loadedThreadId === "string" ? { loadedThreadId: payload.loadedThreadId } : {}),
+        ...(isRecord(payload.activeTurn) ? { activeTurn: payload.activeTurn as unknown as NonNullable<BrowserSnapshot["activeTurn"]> } : {}),
+        ...(isRecord(payload.tokenUsage) ? { tokenUsage: payload.tokenUsage as unknown as NonNullable<BrowserSnapshot["tokenUsage"]> } : {}),
+        ...(Array.isArray(payload.pendingApprovals) ? { pendingApprovals: payload.pendingApprovals as BrowserSnapshot["pendingApprovals"] } : {}),
+        ...(item ? { visibleItems: [...next.visibleItems.filter((entry) => entry.id !== item.id), item] } : {}),
+        ...(thread ? { threads: [thread, ...next.threads.filter((entry) => entry.id !== thread.id)] } : {}),
+      };
     }
     this.store.getState().setSnapshot(next);
   }
@@ -188,6 +225,12 @@ export class CodexWebClient {
   #rejectPending(error: Error): void {
     for (const pending of this.#pending.values()) pending.reject(error);
     this.#pending.clear();
+  }
+
+  #setConnection(status: ConnectionStatus): void {
+    if (status === this.#connectionStatus) return;
+    this.#connectionStatus = status;
+    for (const listener of this.#connectionListeners) listener(status);
   }
 }
 

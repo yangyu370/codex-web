@@ -77,6 +77,8 @@ describe("CodexWebClient", () => {
       },
       { reconnectDelays: [0] },
     );
+    const connectionStates: string[] = [];
+    client.subscribeConnection((status) => connectionStates.push(status));
     client.connect();
     const firstSocket = sockets[0];
     if (!firstSocket) throw new Error("first socket missing");
@@ -87,5 +89,26 @@ describe("CodexWebClient", () => {
     await Bun.sleep(1);
     expect(urls).toEqual(["/ws?after=4", "/ws?after=4"]);
     expect(sockets[1]?.sent).toEqual([]);
+    expect(connectionStates).toEqual(["connecting", "connected", "reconnecting", "connecting"]);
+  });
+
+  test("removes stale approval cards when native work is interrupted", () => {
+    const socket = new FakeSocket();
+    const client = new CodexWebClient({
+      ...snapshot,
+      pendingApprovals: [{
+        id: "a1",
+        kind: "command",
+        threadId: "t1",
+        turnId: "turn1",
+        availableDecisions: ["accept"],
+        status: "pending",
+      }],
+    }, () => socket);
+    client.connect();
+    socket.open();
+    socket.receive({ kind: "event", sequence: 5, type: "approvals.interrupted", payload: { pendingApprovals: [] } });
+
+    expect(client.getSnapshot().pendingApprovals).toEqual([]);
   });
 });
