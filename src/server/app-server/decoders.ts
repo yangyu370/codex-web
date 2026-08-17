@@ -4,6 +4,9 @@ import type {
   VisibleItem,
 } from "../../shared/protocol";
 
+const MAX_ITEM_BYTES = 262_144;
+const MAX_METADATA_BYTES = 4_096;
+
 export class CompatibilityError extends Error {
   constructor(field: string) {
     super(`compatibilityError: ${field}`);
@@ -13,12 +16,12 @@ export class CompatibilityError extends Error {
 
 export function decodeThread(value: unknown): ThreadSummary {
   const thread = record(value, "thread");
-  const id = stringField(thread, "id", "thread.id");
-  const preview = optionalString(thread.preview) ?? "";
+  const id = boundedRequiredString(thread, "id", "thread.id", 512);
+  const preview = boundOldest(optionalString(thread.preview) ?? "", MAX_METADATA_BYTES);
   const createdAt = numberField(thread, "createdAt", "thread.createdAt");
   const updatedAt = optionalNumber(thread.updatedAt) ?? createdAt;
-  const name = optionalString(thread.name)?.trim();
-  const cwd = optionalString(thread.cwd);
+  const name = optionalString(thread.name) ? boundOldest(optionalString(thread.name)?.trim() ?? "", MAX_METADATA_BYTES) : undefined;
+  const cwd = optionalString(thread.cwd) ? boundOldest(optionalString(thread.cwd) ?? "", MAX_METADATA_BYTES) : undefined;
   const status = decodeStatus(thread.status);
 
   return {
@@ -52,14 +55,14 @@ export function decodeModelList(value: unknown): ModelSummary[] {
     throw new CompatibilityError("model/list.data");
   }
   const models: ModelSummary[] = [];
-  for (const value of response.data) {
+  for (const value of response.data.slice(0, 200)) {
     const model = record(value, "model");
     if (model.hidden === true) {
       continue;
     }
-    const id = stringField(model, "id", "model.id");
-    const displayName = stringField(model, "displayName", "model.displayName");
-    const description = optionalString(model.description);
+    const id = boundedRequiredString(model, "id", "model.id", 512);
+    const displayName = boundOldest(stringField(model, "displayName", "model.displayName"), MAX_METADATA_BYTES);
+    const description = optionalString(model.description) ? boundOldest(optionalString(model.description) ?? "", MAX_METADATA_BYTES) : undefined;
     const isDefault = typeof model.isDefault === "boolean" ? model.isDefault : undefined;
     models.push({
       id,
@@ -78,6 +81,10 @@ export function decodeThreadEnvelope(value: unknown): {
   const response = record(value, "thread response");
   const rawThread = record(response.thread, "thread response.thread");
   const turns = Array.isArray(rawThread.turns) ? rawThread.turns : [];
+  return { thread: decodeThread(rawThread), items: decodeTurns(turns) };
+}
+
+export function decodeTurns(turns: unknown[]): VisibleItem[] {
   const items: VisibleItem[] = [];
   for (const turnValue of turns) {
     const turn = record(turnValue, "thread.turn");
@@ -87,7 +94,7 @@ export function decodeThreadEnvelope(value: unknown): {
       if (item) items.push(item);
     }
   }
-  return { thread: decodeThread(rawThread), items };
+  return items;
 }
 
 export function decodeHistoryItem(value: unknown): VisibleItem | undefined {
@@ -95,59 +102,91 @@ export function decodeHistoryItem(value: unknown): VisibleItem | undefined {
   const id = stringField(item, "id", "thread.item.id");
   const type = stringField(item, "type", "thread.item.type");
   if (type === "agentMessage") {
+    const text = boundNewest(optionalString(item.text) ?? "", MAX_ITEM_BYTES);
     return {
       id,
       type: "message",
       role: "assistant",
-      text: optionalString(item.text) ?? "",
+      text: text.value,
       streaming: false,
+      ...(text.truncated ? { truncated: true } : {}),
     };
   }
   if (type === "userMessage") {
+    const text = boundNewest(decodeUserContent(item.content), MAX_ITEM_BYTES);
     return {
       id,
       type: "message",
       role: "user",
-      text: decodeUserContent(item.content),
+      text: text.value,
       streaming: false,
+      ...(text.truncated ? { truncated: true } : {}),
     };
   }
   if (type === "commandExecution") {
+    const output = boundNewest(optionalString(item.aggregatedOutput) ?? "", MAX_ITEM_BYTES);
     return {
       id,
       type: "command",
-      command: optionalString(item.command) ?? "Command",
-      ...(optionalString(item.cwd) ? { cwd: optionalString(item.cwd) } : {}),
-      output: optionalString(item.aggregatedOutput) ?? "",
+      command: boundOldest(optionalString(item.command) ?? "Command", MAX_METADATA_BYTES),
+      ...(optionalString(item.cwd) ? { cwd: boundOldest(optionalString(item.cwd) ?? "", MAX_METADATA_BYTES) } : {}),
+      output: output.value,
       status: decodeCompletedItemStatus(optionalString(item.status)),
       ...(optionalNumber(item.exitCode) === undefined
         ? {}
         : { exitCode: optionalNumber(item.exitCode) }),
+      ...(output.truncated ? { truncated: true } : {}),
     };
   }
   if (type === "fileChange") {
     const first = Array.isArray(item.changes) && item.changes.length > 0
       ? record(item.changes[0], "fileChange.change")
       : {};
+    const diff = boundNewest(optionalString(first.diff) ?? "", MAX_ITEM_BYTES);
     return {
       id,
       type: "fileChange",
-      path: optionalString(first.path) ?? "File changes",
-      ...(optionalString(first.diff) ? { diff: optionalString(first.diff) } : {}),
+      path: boundOldest(optionalString(first.path) ?? "File changes", MAX_METADATA_BYTES),
+      ...(diff.value ? { diff: diff.value } : {}),
       status: decodeCompletedItemStatus(optionalString(item.status)),
+      ...(diff.truncated ? { truncated: true } : {}),
     };
   }
   if (type === "reasoning" || type === "plan") {
     const summary = Array.isArray(item.summary)
       ? item.summary.filter((entry): entry is string => typeof entry === "string").join("\n")
       : "";
+    const text = boundNewest(optionalString(item.text) ?? (summary || type), MAX_ITEM_BYTES);
     return {
       id,
       type: "status",
-      text: optionalString(item.text) ?? (summary || type),
+      text: text.value,
+      ...(text.truncated ? { truncated: true } : {}),
     };
   }
   return undefined;
+}
+
+function boundNewest(value: string, maxBytes: number): { value: string; truncated: boolean } {
+  const encoded = new TextEncoder().encode(value);
+  if (encoded.byteLength <= maxBytes) return { value, truncated: false };
+  let start = encoded.byteLength - maxBytes;
+  while (start < encoded.byteLength && (encoded[start] ?? 0) >> 6 === 0b10) start += 1;
+  return { value: new TextDecoder().decode(encoded.slice(start)), truncated: true };
+}
+
+function boundOldest(value: string, maxBytes: number): string {
+  const encoded = new TextEncoder().encode(value);
+  if (encoded.byteLength <= maxBytes) return value;
+  let end = maxBytes;
+  while (end > 0 && (encoded[end] ?? 0) >> 6 === 0b10) end -= 1;
+  return new TextDecoder().decode(encoded.slice(0, end));
+}
+
+function boundedRequiredString(value: Record<string, unknown>, key: string, field: string, maxBytes: number): string {
+  const result = stringField(value, key, field);
+  if (new TextEncoder().encode(result).byteLength > maxBytes) throw new CompatibilityError(field);
+  return result;
 }
 
 export function record(value: unknown, field: string): Record<string, unknown> {

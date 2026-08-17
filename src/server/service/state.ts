@@ -11,9 +11,27 @@ import type { JsonRpcNotification, JsonRpcServerRequest } from "../app-server/js
 
 const MAX_VISIBLE_ITEMS = 500;
 const MAX_ITEM_BYTES = 262_144;
+const MAX_VISIBLE_BYTES = 4_194_304;
+const MAX_CATALOG_ENTRIES = 500;
+const MAX_METADATA_BYTES = 4_096;
+const MAX_PENDING_APPROVALS = 100;
+const MAX_APPROVAL_REQUEST_BYTES = 65_536;
+const MAX_SNAPSHOT_BYTES = 7_340_032;
 const MAX_DIAGNOSTICS = 500;
+const MAX_DIAGNOSTIC_BYTES = 16_384;
+const MAX_APPROVAL_AUDIT = 500;
+
+export interface ApprovalAuditEntry {
+  approvalId: string;
+  decision: string;
+  deviceId: string;
+  threadId: string;
+  turnId: string;
+  timestamp: number;
+}
 
 export interface ClaimedApproval extends PendingApproval {
+  requestId: string | number;
   method: string;
   params: Record<string, unknown>;
   decision: string;
@@ -24,6 +42,8 @@ export class WebState {
   readonly #listeners = new Set<(event: BrowserEvent) => void>();
   readonly #approvalRequests = new Map<string, JsonRpcServerRequest>();
   readonly #diagnostics: string[] = [];
+  readonly #approvalAudit: ApprovalAuditEntry[] = [];
+  readonly #auditSink?: (type: "diagnostic" | "approval", payload: unknown) => void;
   #sequence = 0;
   #service: BrowserSnapshot["service"];
   #models: ModelSummary[] = [];
@@ -34,13 +54,17 @@ export class WebState {
   #approvals: PendingApproval[] = [];
   #tokenUsage?: BrowserSnapshot["tokenUsage"];
 
-  constructor(platform: "macos" | "windows") {
+  constructor(
+    platform: "macos" | "windows",
+    auditSink?: (type: "diagnostic" | "approval", payload: unknown) => void,
+  ) {
     this.#platform = platform;
+    this.#auditSink = auditSink;
     this.#service = { status: "starting", platform };
   }
 
   snapshot(): BrowserSnapshot {
-    return structuredClone({
+    const snapshot: BrowserSnapshot = structuredClone({
       kind: "snapshot",
       sequence: this.#sequence,
       service: this.#service,
@@ -52,6 +76,10 @@ export class WebState {
       pendingApprovals: this.#approvals.filter((approval) => approval.status === "pending"),
       ...(this.#tokenUsage ? { tokenUsage: this.#tokenUsage } : {}),
     });
+    while (snapshot.visibleItems.length > 0 && !fits(JSON.stringify(snapshot), MAX_SNAPSHOT_BYTES)) {
+      snapshot.visibleItems.shift();
+    }
+    return snapshot;
   }
 
   setService(service: Omit<BrowserSnapshot["service"], "platform">): void {
@@ -60,12 +88,19 @@ export class WebState {
   }
 
   setModels(models: ModelSummary[]): void {
-    this.#models = models.slice();
+    this.#models = models.slice(0, MAX_CATALOG_ENTRIES).flatMap((model) => {
+      if (!fits(model.id, 512)) return [];
+      return [{
+        ...model,
+        displayName: boundOldest(model.displayName, MAX_METADATA_BYTES),
+        ...(model.description ? { description: boundOldest(model.description, MAX_METADATA_BYTES) } : {}),
+      }];
+    });
     this.#emit("models.updated", { models: this.#models });
   }
 
   setThreads(threads: ThreadSummary[]): void {
-    this.#threads = threads.slice(0, 500);
+    this.#threads = threads.slice(0, MAX_CATALOG_ENTRIES).flatMap(boundThread);
     this.#emit("threads.updated", { threads: this.#threads });
   }
 
@@ -77,15 +112,18 @@ export class WebState {
   loadThread(threadId: string, items: VisibleItem[]): void {
     this.#loadedThreadId = threadId;
     this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
+    this.#trimVisibleItems();
     this.#emit("thread.loaded", { threadId, items: this.#visibleItems });
   }
 
   applyNotification(notification: JsonRpcNotification): void {
     try {
       const params = record(notification.params, `${notification.method}.params`);
+      let changedThread: ThreadSummary | undefined;
       switch (notification.method) {
         case "thread/started":
-          this.#upsertThread(decodeThread(params.thread));
+          changedThread = decodeThread(params.thread);
+          this.#upsertThread(changedThread);
           break;
         case "turn/started":
           this.#applyTurnStarted(params);
@@ -106,6 +144,15 @@ export class WebState {
         case "item/fileChange/outputDelta":
           this.#appendDelta(params, "fileChange", "diff");
           break;
+        case "item/fileChange/patchUpdated":
+          this.#applyFileChangePatch(params);
+          break;
+        case "serverRequest/resolved":
+          this.#resolveServerRequest(params.requestId);
+          break;
+        case "error":
+          this.#applyError(params);
+          break;
         case "thread/tokenUsage/updated":
           this.#applyTokenUsage(params);
           break;
@@ -113,7 +160,19 @@ export class WebState {
           this.addDiagnostic(`unknown notification: ${notification.method}`);
           return;
       }
-      this.#emit(notification.method, { snapshot: this.snapshot() });
+      const rawItem = typeof params.item === "object" && params.item !== null && !Array.isArray(params.item)
+        ? params.item as Record<string, unknown>
+        : undefined;
+      const itemId = optionalString(rawItem?.id) ?? optionalString(params.itemId);
+      const item = itemId ? this.#visibleItems.find((entry) => entry.id === itemId) : undefined;
+      this.#emit("work.updated", {
+        ...(changedThread ? { thread: changedThread } : {}),
+        ...(item ? { item } : {}),
+        ...(this.#loadedThreadId ? { loadedThreadId: this.#loadedThreadId } : {}),
+        ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
+        ...(this.#tokenUsage ? { tokenUsage: this.#tokenUsage } : {}),
+        pendingApprovals: this.#approvals.filter((approval) => approval.status === "pending"),
+      });
     } catch (error) {
       this.addDiagnostic(
         `${notification.method}: ${error instanceof Error ? error.message : String(error)}`,
@@ -122,12 +181,21 @@ export class WebState {
   }
 
   addApproval(request: JsonRpcServerRequest): PendingApproval {
+    if (this.#approvalRequests.size >= MAX_PENDING_APPROVALS) {
+      throw new Error("codexRejected: pending approval limit reached");
+    }
+    if (!fits(JSON.stringify(request.params), MAX_APPROVAL_REQUEST_BYTES)) {
+      throw new Error("codexRejected: approval request is too large");
+    }
     const params = record(request.params, `${request.method}.params`);
     const kind = approvalKind(request.method);
     const requestId = request.id;
+    if (!fits(String(requestId), 512)) throw new Error("codexRejected: approval id is too large");
     const id = `approval:${String(requestId)}`;
     const available = Array.isArray(params.availableDecisions)
-      ? params.availableDecisions.filter((value): value is string => typeof value === "string")
+      ? params.availableDecisions
+          .filter((value): value is string => typeof value === "string" && fits(value, 128))
+          .slice(0, 20)
       : defaultApprovalDecisions(kind);
     const itemId = optionalString(params.itemId);
     const existingItem = itemId
@@ -135,14 +203,13 @@ export class WebState {
       : undefined;
     const approval: PendingApproval = {
       id,
-      requestId,
       kind,
-      threadId: requiredString(params, "threadId"),
-      turnId: requiredString(params, "turnId"),
+      threadId: requiredBoundedString(params, "threadId", 512),
+      turnId: requiredBoundedString(params, "turnId", 512),
       ...(itemId ? { itemId } : {}),
-      ...(optionalString(params.reason) ? { reason: optionalString(params.reason) } : {}),
-      ...(optionalString(params.cwd) ? { cwd: optionalString(params.cwd) } : {}),
-      ...(optionalString(params.command) ? { command: optionalString(params.command) } : {}),
+      ...(optionalString(params.reason) ? { reason: boundOldest(optionalString(params.reason) ?? "", MAX_METADATA_BYTES) } : {}),
+      ...(optionalString(params.cwd) ? { cwd: boundOldest(optionalString(params.cwd) ?? "", MAX_METADATA_BYTES) } : {}),
+      ...(optionalString(params.command) ? { command: boundOldest(optionalString(params.command) ?? "", MAX_METADATA_BYTES) } : {}),
       ...(existingItem?.type === "fileChange" && existingItem.diff
         ? { diff: existingItem.diff }
         : {}),
@@ -155,7 +222,7 @@ export class WebState {
     return structuredClone(approval);
   }
 
-  claimApproval(id: string, decision: string): ClaimedApproval {
+  claimApproval(id: string, decision: string, deviceId = "browser"): ClaimedApproval {
     const approval = this.#approvals.find((entry) => entry.id === id);
     const request = this.#approvalRequests.get(id);
     if (!approval || !request || approval.status !== "pending") {
@@ -167,24 +234,61 @@ export class WebState {
     approval.status = "resolved";
     approval.decision = decision;
     this.#approvalRequests.delete(id);
+    this.#approvalAudit.push({
+      approvalId: id,
+      decision,
+      deviceId,
+      threadId: approval.threadId,
+      turnId: approval.turnId,
+      timestamp: Date.now(),
+    });
+    this.#auditSink?.("approval", this.#approvalAudit.at(-1));
+    if (this.#approvalAudit.length > MAX_APPROVAL_AUDIT) {
+      this.#approvalAudit.splice(0, this.#approvalAudit.length - MAX_APPROVAL_AUDIT);
+    }
     const claimed = {
       ...structuredClone(approval),
+      requestId: request.id,
       method: request.method,
       params: record(request.params, `${request.method}.params`),
       decision,
     };
-    this.#emit("approval.resolved", { approval: claimed });
+    this.#approvals = this.#approvals.filter((entry) => entry.id !== id);
+    this.#emit("approval.resolved", {
+      approval: {
+        id: approval.id,
+        decision,
+        status: "resolved",
+        threadId: approval.threadId,
+        turnId: approval.turnId,
+      },
+    });
     return claimed;
   }
 
   interruptApprovals(): void {
+    let changed = false;
     for (const approval of this.#approvals) {
       if (approval.status === "pending") {
         approval.status = "interrupted";
+        changed = true;
       }
     }
     this.#approvalRequests.clear();
-    this.#emit("approvals.interrupted", {});
+    this.#approvals = this.#approvals.filter((approval) => approval.status === "pending");
+    if (changed) this.#emit("approvals.interrupted", { pendingApprovals: [] });
+  }
+
+  interruptActiveWork(): void {
+    this.interruptApprovals();
+    if (this.#activeTurn?.status === "inProgress") {
+      this.#activeTurn.status = "interrupted";
+      this.#emit("turn.interrupted", { snapshot: this.snapshot() });
+    }
+  }
+
+  approvalAudit(): ApprovalAuditEntry[] {
+    return structuredClone(this.#approvalAudit);
   }
 
   onEvent(listener: (event: BrowserEvent) => void): () => void {
@@ -193,7 +297,9 @@ export class WebState {
   }
 
   addDiagnostic(message: string): void {
-    this.#diagnostics.push(message);
+    const bounded = boundNewest(message, MAX_DIAGNOSTIC_BYTES).value;
+    this.#diagnostics.push(bounded);
+    this.#auditSink?.("diagnostic", { message: bounded });
     if (this.#diagnostics.length > MAX_DIAGNOSTICS) {
       this.#diagnostics.splice(0, this.#diagnostics.length - MAX_DIAGNOSTICS);
     }
@@ -204,10 +310,9 @@ export class WebState {
   }
 
   #upsertThread(thread: ThreadSummary): void {
-    this.#threads = [thread, ...this.#threads.filter((entry) => entry.id !== thread.id)].slice(
-      0,
-      500,
-    );
+    const bounded = boundThread(thread)[0];
+    if (!bounded) return;
+    this.#threads = [bounded, ...this.#threads.filter((entry) => entry.id !== bounded.id)].slice(0, MAX_CATALOG_ENTRIES);
   }
 
   #applyTurnStarted(params: Record<string, unknown>): void {
@@ -237,30 +342,36 @@ export class WebState {
     const type = requiredString(item, "type");
     let visible: VisibleItem | undefined;
     if (type === "agentMessage") {
+      const text = boundNewest(optionalString(item.text) ?? "", MAX_ITEM_BYTES);
       visible = {
         id,
         type: "message",
         role: "assistant",
-        text: optionalString(item.text) ?? "",
+        text: text.value,
         streaming: !completed,
+        ...(text.truncated ? { truncated: true } : {}),
       };
     } else if (type === "userMessage") {
+      const text = boundNewest(userMessageText(item.content), MAX_ITEM_BYTES);
       visible = {
         id,
         type: "message",
         role: "user",
-        text: userMessageText(item.content),
+        text: text.value,
         streaming: false,
+        ...(text.truncated ? { truncated: true } : {}),
       };
     } else if (type === "commandExecution") {
       const status = normalizeItemStatus(optionalString(item.status), completed);
+      const output = boundNewest(optionalString(item.aggregatedOutput) ?? "", MAX_ITEM_BYTES);
       visible = {
         id,
         type: "command",
-        command: optionalString(item.command) ?? "Command",
-        ...(optionalString(item.cwd) ? { cwd: optionalString(item.cwd) } : {}),
-        output: optionalString(item.aggregatedOutput) ?? "",
+        command: boundOldest(optionalString(item.command) ?? "Command", MAX_METADATA_BYTES),
+        ...(optionalString(item.cwd) ? { cwd: boundOldest(optionalString(item.cwd) ?? "", MAX_METADATA_BYTES) } : {}),
+        output: output.value,
         status,
+        ...(output.truncated ? { truncated: true } : {}),
         ...(optionalNumber(item.exitCode) === undefined
           ? {}
           : { exitCode: optionalNumber(item.exitCode) }),
@@ -268,21 +379,25 @@ export class WebState {
     } else if (type === "fileChange") {
       const changes = Array.isArray(item.changes) ? item.changes : [];
       const first = changes.length > 0 ? record(changes[0], "fileChange.changes[0]") : {};
+      const diff = boundNewest(optionalString(first.diff) ?? "", MAX_ITEM_BYTES);
       visible = {
         id,
         type: "fileChange",
-        path: optionalString(first.path) ?? "File changes",
-        ...(optionalString(first.diff) ? { diff: optionalString(first.diff) } : {}),
+        path: boundOldest(optionalString(first.path) ?? "File changes", MAX_METADATA_BYTES),
+        ...(diff.value ? { diff: diff.value } : {}),
+        ...(diff.truncated ? { truncated: true } : {}),
         status: normalizeItemStatus(optionalString(item.status), completed),
       };
     } else if (type === "reasoning" || type === "plan") {
       const summary = Array.isArray(item.summary)
         ? item.summary.filter((value): value is string => typeof value === "string").join("\n")
         : undefined;
+      const text = boundNewest(optionalString(item.text) ?? summary ?? type, MAX_ITEM_BYTES);
       visible = {
         id,
         type: "status",
-        text: optionalString(item.text) ?? summary ?? type,
+        text: text.value,
+        ...(text.truncated ? { truncated: true } : {}),
       };
     }
     if (visible) {
@@ -328,6 +443,41 @@ export class WebState {
     };
   }
 
+  #applyFileChangePatch(params: Record<string, unknown>): void {
+    const itemId = requiredString(params, "itemId");
+    const changes = Array.isArray(params.changes) ? params.changes : [];
+    const first = changes.length > 0 ? record(changes[0], "changes[0]") : {};
+    const diff = boundNewest(optionalString(first.diff) ?? "", MAX_ITEM_BYTES);
+    this.#replaceVisibleItem({
+      id: itemId,
+      type: "fileChange",
+      path: boundOldest(optionalString(first.path) ?? "File changes", MAX_METADATA_BYTES),
+      ...(diff.value ? { diff: diff.value } : {}),
+      ...(diff.truncated ? { truncated: true } : {}),
+      status: "running",
+    });
+  }
+
+  #resolveServerRequest(requestId: unknown): void {
+    if (typeof requestId !== "string" && typeof requestId !== "number") return;
+    const entry = [...this.#approvalRequests.entries()].find(([, request]) => request.id === requestId);
+    if (!entry) return;
+    const [id] = entry;
+    this.#approvalRequests.delete(id);
+    this.#approvals = this.#approvals.filter((approval) => approval.id !== id);
+  }
+
+  #applyError(params: Record<string, unknown>): void {
+    const error = record(params.error, "error");
+    const message = boundNewest(optionalString(error.message) ?? "Codex turn failed", MAX_DIAGNOSTIC_BYTES);
+    const turnId = requiredString(params, "turnId");
+    const threadId = requiredString(params, "threadId");
+    this.#replaceVisibleItem({ id: `error:${turnId}`, type: "status", text: message.value, ...(message.truncated ? { truncated: true } : {}) });
+    if (params.willRetry !== true) {
+      this.#activeTurn = { id: turnId, threadId, status: "failed" };
+    }
+  }
+
   #replaceVisibleItem(item: VisibleItem): void {
     const existing = this.#visibleItems.findIndex((entry) => entry.id === item.id);
     if (existing >= 0) {
@@ -337,6 +487,13 @@ export class WebState {
       if (this.#visibleItems.length > MAX_VISIBLE_ITEMS) {
         this.#visibleItems.splice(0, this.#visibleItems.length - MAX_VISIBLE_ITEMS);
       }
+    }
+    this.#trimVisibleItems();
+  }
+
+  #trimVisibleItems(): void {
+    while (visibleItemsBytes(this.#visibleItems) > MAX_VISIBLE_BYTES && this.#visibleItems.length > 1) {
+      this.#visibleItems.shift();
     }
   }
 
@@ -365,6 +522,12 @@ function defaultApprovalDecisions(kind: PendingApproval["kind"]): string[] {
 function requiredString(value: Record<string, unknown>, key: string): string {
   const result = optionalString(value[key]);
   if (result === undefined) throw new Error(`compatibilityError: ${key}`);
+  return result;
+}
+
+function requiredBoundedString(value: Record<string, unknown>, key: string, maxBytes: number): string {
+  const result = requiredString(value, key);
+  if (!fits(result, maxBytes)) throw new Error(`compatibilityError: ${key}`);
   return result;
 }
 
@@ -401,4 +564,30 @@ function boundNewest(value: string, maxBytes: number): { value: string; truncate
   let start = encoded.byteLength - maxBytes;
   while (start < encoded.byteLength && (encoded[start] ?? 0) >> 6 === 0b10) start += 1;
   return { value: new TextDecoder().decode(encoded.slice(start)), truncated: true };
+}
+
+function boundOldest(value: string, maxBytes: number): string {
+  const encoded = new TextEncoder().encode(value);
+  if (encoded.byteLength <= maxBytes) return value;
+  let end = maxBytes;
+  while (end > 0 && (encoded[end] ?? 0) >> 6 === 0b10) end -= 1;
+  return new TextDecoder().decode(encoded.slice(0, end));
+}
+
+function fits(value: string, maxBytes: number): boolean {
+  return new TextEncoder().encode(value).byteLength <= maxBytes;
+}
+
+function boundThread(thread: ThreadSummary): ThreadSummary[] {
+  if (!fits(thread.id, 512)) return [];
+  return [{
+    ...thread,
+    title: boundOldest(thread.title, MAX_METADATA_BYTES),
+    preview: boundOldest(thread.preview, MAX_METADATA_BYTES),
+    ...(thread.cwd ? { cwd: boundOldest(thread.cwd, MAX_METADATA_BYTES) } : {}),
+  }];
+}
+
+function visibleItemsBytes(items: VisibleItem[]): number {
+  return new TextEncoder().encode(JSON.stringify(items)).byteLength;
 }

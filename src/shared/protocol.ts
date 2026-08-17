@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const MAX_BROWSER_MESSAGE_BYTES = 65_536;
+export const MAX_SERVER_MESSAGE_BYTES = 8_388_608;
 
 export const browserMethods = [
   "model.list",
@@ -105,11 +106,11 @@ export type VisibleItem =
       type: "status";
       text: string;
       tone?: "neutral" | "success" | "warning" | "error";
+      truncated?: boolean;
     };
 
 export interface PendingApproval {
   id: string;
-  requestId: string | number;
   kind: "command" | "fileChange" | "permissions";
   threadId: string;
   turnId: string;
@@ -179,5 +180,9 @@ export function parseClientMessage(source: string): BrowserRequest {
 }
 
 export function encodeServerMessage(message: ServerMessage): string {
-  return JSON.stringify(message);
+  const encoded = JSON.stringify(message);
+  if (new TextEncoder().encode(encoded).byteLength > MAX_SERVER_MESSAGE_BYTES) {
+    throw new Error("server message exceeds 8388608 bytes");
+  }
+  return encoded;
 }
