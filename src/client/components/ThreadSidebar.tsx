@@ -1,6 +1,7 @@
 import { MessageSquareCode, PanelLeftClose, Plus, Search } from "lucide-react";
 
 import type { ThreadSummary } from "../../shared/protocol";
+import type { ConnectionStatus } from "../websocket";
 
 interface ThreadSidebarProps {
   threads: ThreadSummary[];
@@ -9,6 +10,7 @@ interface ThreadSidebarProps {
   onQueryChange: (query: string) => void;
   onNewTask: () => void;
   onSelect: (threadId: string) => void;
+  connection: ConnectionStatus;
 }
 
 export function ThreadSidebar({
@@ -18,6 +20,7 @@ export function ThreadSidebar({
   onQueryChange,
   onNewTask,
   onSelect,
+  connection,
 }: ThreadSidebarProps) {
   const normalized = query.trim().toLowerCase();
   const filtered = normalized
@@ -77,8 +80,14 @@ export function ThreadSidebar({
       </div>
       <div className="sidebar-footer">
         <span className="user-avatar">Y</span>
-        <span className="sidebar-footer__account">Local Codex</span>
-        <span className="status-dot" aria-label="Connected" />
+        <span className="sidebar-footer__account">
+          {connection === "connected" ? "Local Codex" : connection}
+        </span>
+        <span
+          className="status-dot"
+          data-status={connection}
+          aria-label={connection === "connected" ? "Connected" : connection}
+        />
       </div>
     </nav>
   );

@@ -280,10 +280,35 @@ summary:focus-visible {
   width: 6px;
 }
 
+.status-dot[data-status="connecting"],
+.status-dot[data-status="reconnecting"] {
+  background: var(--warning);
+}
+
+.status-dot[data-status="closed"] {
+  background: var(--danger);
+}
+
 .workspace {
   display: flex;
   min-width: 0;
   flex-direction: column;
+}
+
+.service-diagnostic {
+  align-items: center;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  color: var(--danger);
+  display: flex;
+  font-size: 12px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 16px;
+}
+
+.service-diagnostic small {
+  color: var(--text-muted);
 }
 
 .app-header {
@@ -330,6 +355,15 @@ summary:focus-visible {
 
 .app-header__status {
   gap: 7px;
+}
+
+.header-context {
+  color: var(--text-muted);
+  font-size: 11px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-pill,
@@ -706,6 +740,21 @@ summary:focus-visible {
   padding: 0 15px;
 }
 
+.token-usage {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  display: flex;
+  font-size: 11px;
+  justify-content: space-between;
+  padding: 9px 14px;
+}
+
+.token-usage strong {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
 .panel-heading__eyebrow {
   color: var(--success);
   font-size: 8.5px;
@@ -815,6 +864,12 @@ summary:focus-visible {
 .activity-row {
   border-bottom: 1px solid var(--border);
   padding: 3px 0;
+}
+
+.conversation-list > *,
+.activity-feed > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
 }
 
 .activity-row summary {

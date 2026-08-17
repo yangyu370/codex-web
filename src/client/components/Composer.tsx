@@ -8,6 +8,7 @@ interface ComposerProps {
   cwd: string;
   model: string;
   models: ModelSummary[];
+  recentDirectories?: string[];
   running: boolean;
   disabled?: boolean;
   onValueChange: (value: string) => void;
@@ -22,6 +23,7 @@ export function Composer({
   cwd,
   model,
   models,
+  recentDirectories = [],
   running,
   disabled,
   onValueChange,
@@ -59,10 +61,16 @@ export function Composer({
             <span className="sr-only">Working directory</span>
             <input
               aria-label="Working directory"
+              list="recent-directories"
               onChange={(event) => onCwdChange(event.target.value)}
               placeholder="Working directory"
               value={cwd}
             />
+            <datalist id="recent-directories">
+              {recentDirectories.map((directory) => (
+                <option key={directory} value={directory} />
+              ))}
+            </datalist>
           </label>
           <label className="composer-control">
             <span className="sr-only">Model</span>
@@ -93,4 +101,3 @@ export function Composer({
     </div>
   );
 }
-

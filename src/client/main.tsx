@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import type { BrowserSnapshot } from "../shared/protocol";
-import { App } from "./App";
+import { App, type ClientSettings } from "./App";
 import { CodexWebClient } from "./websocket";
 
 async function bootstrap(): Promise<BrowserSnapshot> {
@@ -11,16 +11,36 @@ async function bootstrap(): Promise<BrowserSnapshot> {
   return response.json() as Promise<BrowserSnapshot>;
 }
 
+async function loadSettings(): Promise<ClientSettings> {
+  const response = await fetch("/api/settings", { credentials: "same-origin" });
+  if (!response.ok) return { recentDirectories: [] };
+  return response.json() as Promise<ClientSettings>;
+}
+
+async function saveSettings(settings: ClientSettings): Promise<void> {
+  await fetch("/api/settings", {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+}
+
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element is missing");
 
-bootstrap()
-  .then((snapshot) => {
+Promise.all([bootstrap(), loadSettings()])
+  .then(([snapshot, settings]) => {
     const client = new CodexWebClient(snapshot);
     client.connect();
     createRoot(root).render(
       <StrictMode>
-        <App client={client} initialSnapshot={snapshot} />
+        <App
+          client={client}
+          initialSettings={settings}
+          initialSnapshot={snapshot}
+          onPersistSettings={(value) => void saveSettings(value)}
+        />
       </StrictMode>,
     );
   })

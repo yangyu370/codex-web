@@ -53,6 +53,7 @@ function ConversationItem({ item }: { item: VisibleItem }) {
           <ActivityStatus status={item.status} />
         </div>
         {item.output ? <pre>{item.output}</pre> : null}
+        {item.truncated ? <span className="truncation-badge">Output truncated</span> : null}
       </article>
     );
   }
@@ -67,7 +68,12 @@ function ConversationItem({ item }: { item: VisibleItem }) {
       </article>
     );
   }
-  return <div className={`status-note status-note--${item.tone ?? "neutral"}`}>{item.text}</div>;
+  return (
+    <div className={`status-note status-note--${item.tone ?? "neutral"}`}>
+      {item.text}
+      {item.truncated ? <span className="truncation-badge">Summary truncated</span> : null}
+    </div>
+  );
 }
 
 function ActivityStatus({ status }: { status: "running" | "completed" | "failed" }) {
@@ -77,4 +83,3 @@ function ActivityStatus({ status }: { status: "running" | "completed" | "failed"
     <span className={`activity-state activity-state--${status}`}>{status}</span>
   );
 }
-

@@ -16,12 +16,14 @@ interface ActivityPanelProps {
   items: VisibleItem[];
   approvals: PendingApproval[];
   onResolveApproval?: (id: string, decision: string) => void;
+  tokenUsage?: { used: number; contextWindow?: number };
 }
 
 export function ActivityPanel({
   items,
   approvals,
   onResolveApproval,
+  tokenUsage,
 }: ActivityPanelProps) {
   const activities = items.filter(isActivityItem);
   return (
@@ -33,6 +35,14 @@ export function ActivityPanel({
         </div>
         <CircleEllipsis size={17} />
       </div>
+      {tokenUsage ? (
+        <div className="token-usage">
+          <span>Context</span>
+          <strong>
+            {tokenUsage.used.toLocaleString()} / {tokenUsage.contextWindow?.toLocaleString() ?? "—"} tokens
+          </strong>
+        </div>
+      ) : null}
       {approvals.length > 0 ? (
         <section className="approval-stack" aria-label="Pending approvals">
           {approvals.map((approval) => (

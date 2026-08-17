@@ -7,6 +7,8 @@ interface AppHeaderProps {
   activeTurn: BrowserSnapshot["activeTurn"];
   threadTitle?: string;
   onInterrupt?: () => void;
+  cwd: string;
+  model: string;
 }
 
 export function AppHeader({
@@ -14,6 +16,8 @@ export function AppHeader({
   activeTurn,
   threadTitle,
   onInterrupt,
+  cwd,
+  model,
 }: AppHeaderProps) {
   const ready = service.status === "ready";
   return (
@@ -24,6 +28,9 @@ export function AppHeader({
         <strong>{threadTitle ?? "New task"}</strong>
       </div>
       <div className="app-header__status">
+        <span className="header-context" title={`${model} · ${cwd}`}>
+          {model}{cwd ? ` · ${cwd}` : ""}
+        </span>
         <span className={`status-pill status-pill--${service.status}`}>
           {ready ? (
             <span className="status-dot" aria-hidden="true" />
@@ -48,4 +55,3 @@ export function AppHeader({
     </header>
   );
 }
-
