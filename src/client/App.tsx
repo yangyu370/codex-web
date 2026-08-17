@@ -1,5 +1,5 @@
 import { Activity, MessageSquareText, Rows3 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { BrowserSnapshot } from "../shared/protocol";
 import { ActivityPanel } from "./components/ActivityPanel";
@@ -7,10 +7,12 @@ import { AppHeader } from "./components/AppHeader";
 import { Composer } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
 import { ThreadSidebar } from "./components/ThreadSidebar";
+import type { CodexWebClient } from "./websocket";
 import "./styles.css";
 
 export interface AppProps {
   initialSnapshot: BrowserSnapshot;
+  client?: CodexWebClient;
   onSelectThread?: (threadId: string) => void;
   onNewTask?: () => void;
   onSend?: (input: { text: string; cwd: string; model: string }) => void;
@@ -20,6 +22,7 @@ export interface AppProps {
 
 export function App({
   initialSnapshot,
+  client,
   onSelectThread,
   onNewTask,
   onSend,
@@ -44,6 +47,46 @@ export function App({
   );
   const running = snapshot.activeTurn?.status === "inProgress";
 
+  useEffect(() => {
+    if (!client) return undefined;
+    setSnapshot(client.getSnapshot());
+    return client.subscribe(setSnapshot);
+  }, [client]);
+
+  async function selectThread(threadId: string) {
+    onSelectThread?.(threadId);
+    if (client) await client.request("thread.resume", { threadId });
+  }
+
+  async function send() {
+    const input = { text: draft, cwd, model };
+    onSend?.(input);
+    if (client) {
+      let threadId = snapshot.loadedThreadId;
+      if (!threadId) {
+        const result = (await client.request("thread.start", { cwd, model })) as { id: string };
+        threadId = result.id;
+      }
+      await client.request("turn.start", { threadId, text: draft });
+    }
+    setDraft("");
+  }
+
+  function interrupt() {
+    onInterrupt?.();
+    if (client && snapshot.activeTurn) {
+      void client.request("turn.interrupt", {
+        threadId: snapshot.activeTurn.threadId,
+        turnId: snapshot.activeTurn.id,
+      });
+    }
+  }
+
+  function resolveApproval(id: string, decision: string) {
+    onResolveApproval?.(id, decision);
+    if (client) void client.request("approval.resolve", { approvalId: id, decision });
+  }
+
   function newTask() {
     setSnapshot((current) => ({
       ...current,
@@ -63,7 +106,7 @@ export function App({
         onNewTask={newTask}
         onQueryChange={setQuery}
         onSelect={(threadId) => {
-          onSelectThread?.(threadId);
+          void selectThread(threadId);
           setMobileView("chat");
         }}
         query={query}
@@ -73,7 +116,7 @@ export function App({
       <section className="workspace">
         <AppHeader
           activeTurn={snapshot.activeTurn}
-          onInterrupt={onInterrupt}
+          onInterrupt={interrupt}
           service={snapshot.service}
           threadTitle={thread?.title}
         />
@@ -85,12 +128,9 @@ export function App({
             model={model}
             models={snapshot.models}
             onCwdChange={setCwd}
-            onInterrupt={() => onInterrupt?.()}
+            onInterrupt={interrupt}
             onModelChange={setModel}
-            onSend={() => {
-              onSend?.({ text: draft, cwd, model });
-              setDraft("");
-            }}
+            onSend={() => void send()}
             onValueChange={setDraft}
             running={running}
             value={draft}
@@ -100,7 +140,7 @@ export function App({
       <ActivityPanel
         approvals={snapshot.pendingApprovals}
         items={snapshot.visibleItems}
-        onResolveApproval={onResolveApproval}
+        onResolveApproval={resolveApproval}
       />
       <nav aria-label="Mobile sections" className="mobile-tabs">
         <button data-active={mobileView === "tasks"} onClick={() => setMobileView("tasks")} type="button">
@@ -116,4 +156,3 @@ export function App({
     </div>
   );
 }
-

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import type { BrowserSnapshot } from "../shared/protocol";
 import { App } from "./App";
+import { CodexWebClient } from "./websocket";
 
 async function bootstrap(): Promise<BrowserSnapshot> {
   const response = await fetch("/api/bootstrap", { credentials: "same-origin" });
@@ -15,9 +16,11 @@ if (!root) throw new Error("Root element is missing");
 
 bootstrap()
   .then((snapshot) => {
+    const client = new CodexWebClient(snapshot);
+    client.connect();
     createRoot(root).render(
       <StrictMode>
-        <App initialSnapshot={snapshot} />
+        <App client={client} initialSnapshot={snapshot} />
       </StrictMode>,
     );
   })
@@ -39,4 +42,3 @@ function escapeHtml(value: string): string {
     return entities[character] ?? character;
   });
 }
-
