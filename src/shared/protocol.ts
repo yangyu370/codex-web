@@ -79,6 +79,25 @@ export interface DirectoryListing {
   truncated: boolean;
 }
 
+export interface AttachmentLimits {
+  files: number;
+  fileBytes: number;
+  totalBytes: number;
+}
+
+export interface AttachmentSessionSummary {
+  id: string;
+  expiresAt: number;
+  limits: AttachmentLimits;
+}
+
+export interface AttachmentSummary {
+  id: string;
+  name: string;
+  size: number;
+  kind: "text" | "pdf" | "image";
+}
+
 export interface ThreadSummary {
   id: string;
   title: string;
