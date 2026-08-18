@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+test("keeps the composer in the initial viewport with a long task history", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "mobile", "Desktop grid regression");
+  await page.goto("/");
+
+  await expect(page.getByRole("textbox", { name: "Message Codex" })).toBeInViewport();
+});
+
 test("daily Codex workflow", async ({ page }, testInfo) => {
   await page.goto("/");
   if (testInfo.project.name === "mobile") {

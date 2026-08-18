@@ -33,7 +33,20 @@ function handle(message: Record<string, unknown>): void {
       data: [{ id: "gpt-fake", displayName: "GPT Fake", isDefault: true }],
     });
   }
-  if (method === "thread/list") return respond(id, { data: [], nextCursor: null });
+  if (method === "thread/list") {
+    return respond(id, {
+      data: Array.from({ length: 100 }, (_, index) => ({
+        id: `history-${index}`,
+        name: `Historical task ${index + 1}`,
+        preview: `Previous task ${index + 1}`,
+        createdAt: index + 1,
+        updatedAt: index + 1,
+        cwd: "/work/history",
+        status: { type: "idle" },
+      })),
+      nextCursor: null,
+    });
+  }
   if (method === "thread/start") {
     const params = message.params as Record<string, unknown>;
     return respond(id, {

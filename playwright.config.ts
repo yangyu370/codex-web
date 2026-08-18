@@ -1,12 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const port = process.env.CODEX_WEB_PORT ?? "4173";
+
 export default defineConfig({
   testDir: "./tests/e2e",
   testMatch: "**/*.pw.ts",
   timeout: 30_000,
   expect: { timeout: 5_000 },
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
   },
   projects: [
@@ -18,7 +20,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "bun tests/e2e/start.ts",
-    url: "http://127.0.0.1:4173/api/healthz",
+    url: `http://127.0.0.1:${port}/api/healthz`,
     reuseExistingServer: false,
     timeout: 30_000,
   },
