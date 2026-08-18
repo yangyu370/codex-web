@@ -106,9 +106,10 @@ export function App({
   useEffect(() => client?.subscribeConnection(setConnection), [client]);
 
   useEffect(() => {
+    if (newTaskMode) return;
     const selected = snapshot.threads.find((entry) => entry.id === snapshot.loadedThreadId);
     if (selected?.cwd && selected.cwd !== cwd) void changeCwd(selected.cwd);
-  }, [cwd, snapshot.loadedThreadId, snapshot.threads]);
+  }, [newTaskMode, snapshot.loadedThreadId, snapshot.threads]);
 
   useEffect(() => {
     if (snapshot.models.some((entry) => entry.id === model)) return;

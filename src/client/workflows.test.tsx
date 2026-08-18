@@ -309,6 +309,9 @@ describe("live client workflows", () => {
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: "New task" }));
+    await user.clear(screen.getByRole("combobox", { name: "Working directory" }));
+    await user.type(screen.getByRole("combobox", { name: "Working directory" }), "/work/new");
+    await user.type(screen.getByRole("textbox", { name: "Message Codex" }), "Start fresh");
     act(() => {
       socket.receive({
         kind: "event",
@@ -317,11 +320,11 @@ describe("live client workflows", () => {
         payload: { threads: oldSnapshot.threads },
       });
     });
-    await user.clear(screen.getByRole("combobox", { name: "Working directory" }));
-    await user.type(screen.getByRole("combobox", { name: "Working directory" }), "/work/new");
-    await user.type(screen.getByRole("textbox", { name: "Message Codex" }), "Start fresh");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(JSON.parse(socket.sent[0] ?? "null")).toMatchObject({ method: "thread.start" });
+    expect(JSON.parse(socket.sent[0] ?? "null")).toMatchObject({
+      method: "thread.start",
+      params: { cwd: "/work/new" },
+    });
   });
 });

@@ -66,6 +66,15 @@ describe("AttachmentStore sessions", () => {
     });
   });
 
+  test("normalizes an unavailable project into a safe attachment error", async () => {
+    const { project, dataDirectory, platform } = await fixture();
+    const store = track(new AttachmentStore(platform, dataDirectory));
+
+    await expect(store.create(path.join(project, "missing"))).rejects.toMatchObject({
+      code: "invalidAttachment",
+    });
+  });
+
   test("refuses a symlinked project container before creating a session", async () => {
     const { project, outside, dataDirectory, platform } = await fixture();
     await symlink(outside, path.join(project, ".codex-web"));
@@ -156,6 +165,34 @@ describe("AttachmentStore files", () => {
     expect(files[0]?.endsWith("-notes.ts")).toBe(true);
     expect(await readFile(path.join(project, ".codex-web", "attachments", session.id, files[0]!), "utf8"))
       .toBe("export const ready = true;\n");
+  });
+
+  test("accepts Bun's native network request body reader", async () => {
+    const { project, dataDirectory, platform } = await fixture();
+    const store = track(new AttachmentStore(platform, dataDirectory));
+    const session = await store.create(project);
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (request) => Response.json(await store.addFile(
+        session.id,
+        "network.txt",
+        "text/plain",
+        request.body!,
+      )),
+    });
+    try {
+      const response = await fetch(server.url, { method: "POST", body: "network body" });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        name: "network.txt",
+        size: 12,
+        kind: "text",
+      });
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("classifies supported image and PDF signatures independently of browser MIME", async () => {

@@ -39,6 +39,24 @@ $env:CODEX_WEB_BROWSE_ROOTS = 'D:\Projects;\\server\share\work'
 
 Only configured roots and their descendants are visible in the Web UI.
 
+## Message attachments
+
+Choose a project directory, then use the paperclip in the composer to attach
+files from the browser device. Codex Web accepts up to 10 files per message,
+20 MiB per file, and 50 MiB total. Supported content is UTF-8 text/source,
+PDF, PNG, JPEG, WebP, and GIF.
+
+Uploads are temporary context, not durable project files. They are stored on
+the machine running Codex Web under
+`<project>/.codex-web/attachments/<session-id>/`, passed only to the current
+Codex turn, and deleted when that turn completes, fails, or is interrupted.
+Abandoned drafts expire after one hour. The host also limits live attachment
+storage to 100 sessions and 500 MiB total.
+
+After updating Codex Web, restart the native launcher before reloading the
+browser. A browser/backend protocol mismatch shows a blocking restart message
+instead of leaving directory browsing or uploads stuck.
+
 For Vite hot reload, run `bun run dev:server` and `bun run dev` in separate terminals, then open `http://127.0.0.1:5173`.
 
 ## Remote access

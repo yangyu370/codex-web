@@ -96,7 +96,8 @@ export class AttachmentClient implements AttachmentTransport {
   }
 
   async #request<T>(url: string, init: RequestInit, parse = true): Promise<T> {
-    const response = await this.fetcher(url, { ...init, credentials: "same-origin" });
+    const fetcher = this.fetcher;
+    const response = await fetcher(url, { ...init, credentials: "same-origin" });
     if (!response.ok) throw responseError(await response.text(), response.status);
     return (parse ? await response.json() : undefined) as T;
   }

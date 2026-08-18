@@ -19,7 +19,7 @@ import type {
   AttachmentSessionSummary,
   AttachmentSummary,
 } from "../../shared/protocol";
-import type { HostPlatform } from "../platform";
+import type { HostPlatform, ValidatedPath } from "../platform";
 import { AttachmentError } from "./attachment-error";
 import { classifyAttachment, sanitizeAttachmentName } from "./attachment-files";
 import type { PreparedAttachmentSession } from "./turn-coordinator";
@@ -107,7 +107,7 @@ export class AttachmentStore {
         throw new AttachmentError("attachmentCapacity", "attachment session capacity reached");
       }
 
-      const validated = await this.#platform.validateWorkingDirectory(cwd);
+      const validated = await this.#validateWorkingDirectory(cwd);
       const root = await this.#ensureAttachmentsRoot(validated.resolvedPath);
       const id = crypto.randomUUID();
       const directory = this.#path().join(root.attachmentsRoot, id);
@@ -256,8 +256,6 @@ export class AttachmentStore {
         if (handle) await handle.close().catch(() => undefined);
         await unlink(temporaryPath).catch(() => undefined);
         throw error;
-      } finally {
-        reader.releaseLock();
       }
     });
   }
@@ -301,7 +299,7 @@ export class AttachmentStore {
     return this.#withMutationLock(async () => {
       const session = this.#requireDraftSession(sessionId);
       await this.#validateSession(session);
-      const validatedCwd = await this.#platform.validateWorkingDirectory(cwd);
+      const validatedCwd = await this.#validateWorkingDirectory(cwd);
       if (!this.#equal(validatedCwd.resolvedPath, session.canonicalCwd)) {
         throw new AttachmentError("invalidAttachment", "attachment project does not match thread");
       }
@@ -518,7 +516,7 @@ export class AttachmentStore {
 
   async #validateSession(session: StoredSession): Promise<void> {
     this.#assertSessionId(session.id);
-    const validated = await this.#platform.validateWorkingDirectory(session.cwd);
+    const validated = await this.#validateWorkingDirectory(session.cwd);
     if (!this.#equal(validated.resolvedPath, session.canonicalCwd)) {
       throw new AttachmentError("invalidAttachment", "attachment project changed");
     }
@@ -634,6 +632,14 @@ export class AttachmentStore {
 
   #hostBytes(): number {
     return [...this.#sessions.values()].reduce((total, session) => total + session.totalBytes, 0);
+  }
+
+  async #validateWorkingDirectory(cwd: string): Promise<ValidatedPath> {
+    try {
+      return await this.#platform.validateWorkingDirectory(cwd);
+    } catch {
+      throw new AttachmentError("invalidAttachment", "attachment project is unavailable");
+    }
   }
 
   #pruneTerminalTurns(): void {

@@ -27,11 +27,11 @@ for await (const chunk of Bun.stdin.stream()) {
     if (newline < 0) break;
     const line = buffer.slice(0, newline).trim();
     buffer = buffer.slice(newline + 1);
-    if (line) handle(JSON.parse(line) as Record<string, unknown>);
+    if (line) await handle(JSON.parse(line) as Record<string, unknown>);
   }
 }
 
-function handle(message: Record<string, unknown>): void {
+async function handle(message: Record<string, unknown>): Promise<void> {
   const id = message.id as string | number | undefined;
   const method = message.method;
   if (method === "initialized") return;
@@ -74,6 +74,11 @@ function handle(message: Record<string, unknown>): void {
   }
   if (method === "turn/start") {
     const params = message.params as Record<string, unknown>;
+    const attachmentError = await validateAttachmentInputs(params.input);
+    if (attachmentError) {
+      write({ id, error: { code: -32602, message: attachmentError } });
+      return;
+    }
     const threadId = String(params.threadId);
     const turnId = `turn-e2e-${nextTurnId}`;
     const itemId = `patch-e2e-${nextTurnId}`;
@@ -133,6 +138,40 @@ function handle(message: Record<string, unknown>): void {
       turn: { id: approval.turnId, status: "completed" },
     });
   }
+}
+
+async function validateAttachmentInputs(value: unknown): Promise<string | undefined> {
+  if (!Array.isArray(value)) return undefined;
+  const inputs = value.filter((entry): entry is Record<string, unknown> =>
+    typeof entry === "object" && entry !== null && !Array.isArray(entry),
+  );
+  const manifest = inputs.find((entry) =>
+    entry.type === "text" &&
+    typeof entry.text === "string" &&
+    entry.text.includes("Attached files for this turn are available on the local filesystem:"),
+  )?.text;
+  if (typeof manifest !== "string") return undefined;
+
+  const paths = [...manifest.matchAll(/ at ("(?:[^"\\]|\\.)*") \(/g)].flatMap((match) => {
+    try {
+      const parsed = JSON.parse(match[1] ?? "") as unknown;
+      return typeof parsed === "string" ? [parsed] : [];
+    } catch {
+      return [];
+    }
+  });
+  if (paths.length === 0) return "attachment manifest contains no readable paths";
+  for (const filePath of paths) {
+    if (!(await Bun.file(filePath).exists())) return "attachment manifest path is unreadable";
+  }
+  const localImages = new Set(inputs.flatMap((entry) =>
+    entry.type === "localImage" && typeof entry.path === "string" ? [entry.path] : [],
+  ));
+  const imagePaths = paths.filter((filePath) => /\.(?:png|jpe?g|webp|gif)$/i.test(filePath));
+  if (imagePaths.some((filePath) => !localImages.has(filePath))) {
+    return "image attachment is not a native localImage input";
+  }
+  return undefined;
 }
 
 function respond(id: unknown, result: unknown): void {
