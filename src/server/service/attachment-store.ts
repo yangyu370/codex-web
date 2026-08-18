@@ -1,6 +1,7 @@
 import {
   lstat,
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
@@ -13,13 +14,22 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
-import type { AttachmentSessionSummary } from "../../shared/protocol";
+import type {
+  AttachmentLimits,
+  AttachmentSessionSummary,
+  AttachmentSummary,
+} from "../../shared/protocol";
 import type { HostPlatform } from "../platform";
+import { AttachmentError } from "./attachment-error";
+import { classifyAttachment, sanitizeAttachmentName } from "./attachment-files";
+
+export { AttachmentError } from "./attachment-error";
 
 const DEFAULT_TTL_MS = 3_600_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 600_000;
 const DEFAULT_MAX_SESSIONS = 100;
-const MAX_REGISTRY_BYTES = 262_144;
+const MAX_REGISTRY_BYTES = 1_048_576;
+const DEFAULT_MAX_HOST_BYTES = 524_288_000;
 const MAX_PATH_BYTES = 4_096;
 const MARKER_NAME = ".codex-web-owner.json";
 const REGISTRY_NAME = "attachment-sessions.json";
@@ -31,25 +41,17 @@ const LIMITS = {
   totalBytes: 52_428_800,
 } as const;
 
-export class AttachmentError extends Error {
-  constructor(
-    public readonly code:
-      | "invalidAttachment"
-      | "attachmentTooLarge"
-      | "attachmentCapacity"
-      | "attachmentExpired",
-    message: string,
-  ) {
-    super(message);
-    this.name = "AttachmentError";
-  }
-}
-
 export interface AttachmentStoreOptions {
   now?: () => number;
   maxSessions?: number;
   ttlMs?: number;
   sweepIntervalMs?: number;
+  limits?: AttachmentLimits;
+  maxHostBytes?: number;
+}
+
+interface StoredAttachment extends AttachmentSummary {
+  storedName: string;
 }
 
 interface StoredSession {
@@ -65,6 +67,7 @@ interface StoredSession {
   expiresAt: number;
   state: "draft" | "starting" | "consumed";
   totalBytes: number;
+  files: StoredAttachment[];
 }
 
 interface OwnershipMarker {
@@ -79,9 +82,12 @@ export class AttachmentStore {
   readonly #now: () => number;
   readonly #maxSessions: number;
   readonly #ttlMs: number;
+  readonly #limits: AttachmentLimits;
+  readonly #maxHostBytes: number;
   readonly #sessions = new Map<string, StoredSession>();
   readonly #timer: ReturnType<typeof setInterval>;
   #initialization?: Promise<void>;
+  #mutationTail: Promise<void> = Promise.resolve();
   #closed = false;
 
   constructor(
@@ -94,6 +100,8 @@ export class AttachmentStore {
     this.#now = options.now ?? Date.now;
     this.#maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.#ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    this.#limits = options.limits ? { ...options.limits } : { ...LIMITS };
+    this.#maxHostBytes = options.maxHostBytes ?? DEFAULT_MAX_HOST_BYTES;
     this.#timer = setInterval(
       () => void this.sweepExpired().catch(() => undefined),
       options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS,
@@ -132,6 +140,7 @@ export class AttachmentStore {
       expiresAt: createdAt + this.#ttlMs,
       state: "draft",
       totalBytes: 0,
+      files: [],
     };
     this.#sessions.set(id, session);
     try {
@@ -147,11 +156,152 @@ export class AttachmentStore {
   async cancel(sessionId: string): Promise<void> {
     this.#assertSessionId(sessionId);
     await this.#initialize();
-    const session = this.#sessions.get(sessionId);
-    if (!session) {
-      throw new AttachmentError("attachmentExpired", "attachment session is unavailable");
-    }
-    await this.#deleteSession(session);
+    await this.#withMutationLock(async () => {
+      const session = this.#requireSession(sessionId);
+      await this.#deleteSession(session);
+    });
+  }
+
+  async getSession(
+    sessionId: string,
+  ): Promise<AttachmentSessionSummary & { attachments: AttachmentSummary[] }> {
+    this.#assertSessionId(sessionId);
+    await this.#initialize();
+    const session = this.#requireSession(sessionId);
+    return {
+      ...this.#summary(session),
+      attachments: session.files.map(({ id, name, size, kind }) => ({ id, name, size, kind })),
+    };
+  }
+
+  async addFile(
+    sessionId: string,
+    name: string,
+    mediaType: string,
+    body: ReadableStream<Uint8Array>,
+    declaredLength?: number,
+  ): Promise<AttachmentSummary> {
+    this.#assertSessionId(sessionId);
+    this.#assertOpen();
+    await this.#initialize();
+    return this.#withMutationLock(async () => {
+      const session = this.#requireDraftSession(sessionId);
+      await this.#validateSession(session);
+      if (session.files.length >= this.#limits.files) {
+        throw new AttachmentError("attachmentCapacity", "attachment file capacity reached");
+      }
+      if (
+        declaredLength !== undefined &&
+        (!Number.isSafeInteger(declaredLength) || declaredLength < 0)
+      ) {
+        throw new AttachmentError("invalidAttachment", "attachment length is invalid");
+      }
+      if (declaredLength !== undefined && declaredLength > this.#limits.fileBytes) {
+        throw new AttachmentError("attachmentTooLarge", "attachment exceeds the per-file limit");
+      }
+      if (
+        declaredLength !== undefined &&
+        (session.totalBytes + declaredLength > this.#limits.totalBytes ||
+          this.#hostBytes() + declaredLength > this.#maxHostBytes)
+      ) {
+        throw new AttachmentError("attachmentCapacity", "attachment byte capacity reached");
+      }
+
+      void mediaType;
+      const id = crypto.randomUUID();
+      const safeName = sanitizeAttachmentName(name);
+      const storedName = `${id}-${safeName}`;
+      const temporaryPath = this.#path().join(session.directory, `${id}.uploading`);
+      const finalPath = this.#path().join(session.directory, storedName);
+      const reader = body.getReader();
+      const prefixChunks: Uint8Array[] = [];
+      let prefixBytes = 0;
+      let size = 0;
+      const hostBytes = this.#hostBytes();
+      let handle: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        handle = await open(temporaryPath, "wx", 0o600);
+        while (true) {
+          const result = await reader.read();
+          if (result.done) break;
+          if (!(result.value instanceof Uint8Array)) {
+            throw new AttachmentError("invalidAttachment", "attachment stream is invalid");
+          }
+          size += result.value.byteLength;
+          if (size > this.#limits.fileBytes) {
+            throw new AttachmentError("attachmentTooLarge", "attachment exceeds the per-file limit");
+          }
+          if (
+            session.totalBytes + size > this.#limits.totalBytes ||
+            hostBytes + size > this.#maxHostBytes
+          ) {
+            throw new AttachmentError("attachmentCapacity", "attachment byte capacity reached");
+          }
+          if (prefixBytes < 16) {
+            const prefix = result.value.subarray(0, Math.min(result.value.byteLength, 16 - prefixBytes));
+            prefixChunks.push(prefix.slice());
+            prefixBytes += prefix.byteLength;
+          }
+          await writeAll(handle, result.value);
+        }
+        await handle.close();
+        handle = undefined;
+        const kind = await classifyAttachment(temporaryPath, joinBytes(prefixChunks, prefixBytes));
+        await rename(temporaryPath, finalPath);
+        const attachment: StoredAttachment = { id, name: safeName, storedName, size, kind };
+        session.files.push(attachment);
+        session.totalBytes += size;
+        try {
+          await this.#persist();
+        } catch (error) {
+          session.files.pop();
+          session.totalBytes -= size;
+          await unlink(finalPath).catch(() => undefined);
+          throw error;
+        }
+        return { id, name: safeName, size, kind };
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        if (handle) await handle.close().catch(() => undefined);
+        await unlink(temporaryPath).catch(() => undefined);
+        throw error;
+      } finally {
+        reader.releaseLock();
+      }
+    });
+  }
+
+  async removeFile(sessionId: string, attachmentId: string): Promise<void> {
+    this.#assertSessionId(sessionId);
+    this.#assertSessionId(attachmentId);
+    await this.#initialize();
+    await this.#withMutationLock(async () => {
+      const session = this.#requireDraftSession(sessionId);
+      await this.#validateSession(session);
+      const index = session.files.findIndex((file) => file.id === attachmentId);
+      if (index < 0) {
+        throw new AttachmentError("invalidAttachment", "attachment is unavailable");
+      }
+      const attachment = session.files[index]!;
+      const filePath = this.#path().join(session.directory, attachment.storedName);
+      const deletingPath = `${filePath}.deleting`;
+      const info = await lstat(filePath).catch(() => undefined);
+      if (!info?.isFile() || info.isSymbolicLink()) {
+        throw new AttachmentError("invalidAttachment", "attachment file is invalid");
+      }
+      await rename(filePath, deletingPath);
+      session.files.splice(index, 1);
+      session.totalBytes -= attachment.size;
+      try {
+        await this.#persist();
+      } catch (error) {
+        session.files.splice(index, 0, attachment);
+        session.totalBytes += attachment.size;
+        await rename(deletingPath, filePath).catch(() => undefined);
+        throw error;
+      }
+      await unlink(deletingPath).catch(() => undefined);
+    });
   }
 
   async sweepExpired(): Promise<void> {
@@ -200,7 +350,7 @@ export class AttachmentStore {
     }
     if (!isRecord(parsed) || !Array.isArray(parsed.sessions)) return;
     for (const value of parsed.sessions.slice(0, this.#maxSessions)) {
-      const session = parseStoredSession(value);
+      const session = parseStoredSession(value, this.#limits);
       if (session) this.#sessions.set(session.id, session);
     }
   }
@@ -318,7 +468,7 @@ export class AttachmentStore {
     return {
       id: session.id,
       expiresAt: Math.floor(session.expiresAt / 1_000),
-      limits: { ...LIMITS },
+      limits: { ...this.#limits },
     };
   }
 
@@ -345,6 +495,41 @@ export class AttachmentStore {
   #assertOpen(): void {
     if (this.#closed) {
       throw new AttachmentError("attachmentExpired", "attachment store is closed");
+    }
+  }
+
+  #requireSession(sessionId: string): StoredSession {
+    const session = this.#sessions.get(sessionId);
+    if (!session || session.expiresAt <= this.#now()) {
+      throw new AttachmentError("attachmentExpired", "attachment session is unavailable");
+    }
+    return session;
+  }
+
+  #requireDraftSession(sessionId: string): StoredSession {
+    const session = this.#requireSession(sessionId);
+    if (session.state !== "draft") {
+      throw new AttachmentError("attachmentExpired", "attachment session is no longer editable");
+    }
+    return session;
+  }
+
+  #hostBytes(): number {
+    return [...this.#sessions.values()].reduce((total, session) => total + session.totalBytes, 0);
+  }
+
+  async #withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.#mutationTail;
+    let release: () => void = () => {};
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#mutationTail = previous.then(() => current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
     }
   }
 }
@@ -397,7 +582,7 @@ async function readMarker(markerPath: string): Promise<OwnershipMarker | undefin
   return undefined;
 }
 
-function parseStoredSession(value: unknown): StoredSession | undefined {
+function parseStoredSession(value: unknown, limits: AttachmentLimits): StoredSession | undefined {
   if (!isRecord(value)) return undefined;
   if (
     typeof value.id !== "string" ||
@@ -415,10 +600,18 @@ function parseStoredSession(value: unknown): StoredSession | undefined {
     (value.state !== "draft" && value.state !== "starting" && value.state !== "consumed") ||
     typeof value.totalBytes !== "number" ||
     !Number.isSafeInteger(value.totalBytes) ||
-    value.totalBytes < 0
+    value.totalBytes < 0 ||
+    !Array.isArray(value.files)
   ) {
     return undefined;
   }
+  const files = value.files.map(parseStoredAttachment);
+  if (
+    files.some((file) => !file) ||
+    files.length > limits.files ||
+    files.reduce((total, file) => total + (file?.size ?? 0), 0) !== value.totalBytes ||
+    value.totalBytes > limits.totalBytes
+  ) return undefined;
   return {
     id: value.id,
     cwd: value.cwd,
@@ -432,7 +625,54 @@ function parseStoredSession(value: unknown): StoredSession | undefined {
     expiresAt: value.expiresAt,
     state: value.state,
     totalBytes: value.totalBytes,
+    files: files as StoredAttachment[],
   };
+}
+
+function parseStoredAttachment(value: unknown): StoredAttachment | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !UUID_PATTERN.test(value.id) ||
+    typeof value.name !== "string" ||
+    byteLength(value.name) > 120 ||
+    typeof value.storedName !== "string" ||
+    byteLength(value.storedName) > 180 ||
+    value.storedName !== `${value.id}-${value.name}` ||
+    typeof value.size !== "number" ||
+    !Number.isSafeInteger(value.size) ||
+    value.size < 0 ||
+    (value.kind !== "text" && value.kind !== "pdf" && value.kind !== "image")
+  ) return undefined;
+  return {
+    id: value.id,
+    name: value.name,
+    storedName: value.storedName,
+    size: value.size,
+    kind: value.kind,
+  };
+}
+
+async function writeAll(
+  handle: Awaited<ReturnType<typeof open>>,
+  chunk: Uint8Array,
+): Promise<void> {
+  let offset = 0;
+  while (offset < chunk.byteLength) {
+    const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset, null);
+    if (bytesWritten === 0) throw new Error("attachment write made no progress");
+    offset += bytesWritten;
+  }
+}
+
+function joinBytes(chunks: Uint8Array[], length: number): Uint8Array {
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
