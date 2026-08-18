@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, realpath, rm, stat, symlink, writeFile } from "
 import os from "node:os";
 import path from "node:path";
 
-import { createMacPlatform, type AppServerProcess, type PlatformRuntime } from "../platform";
+import { selectHostPlatform, type AppServerProcess, type PlatformRuntime } from "../platform";
 import { DirectoryService } from "./directories";
 
 const temporaryDirectories: string[] = [];
@@ -105,5 +105,5 @@ function createPlatform(home: string) {
     spawn: () => unusedProcess,
     terminateTree: async () => undefined,
   };
-  return createMacPlatform(runtime);
+  return selectHostPlatform(process.platform === "win32" ? "win32" : "darwin", runtime);
 }

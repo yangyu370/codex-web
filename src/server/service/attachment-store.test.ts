@@ -15,7 +15,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 
-import { createMacPlatform, type AppServerProcess, type PlatformRuntime } from "../platform";
+import { selectHostPlatform, type AppServerProcess, type PlatformRuntime } from "../platform";
 import { AttachmentStore } from "./attachment-store";
 
 const stores: AttachmentStore[] = [];
@@ -444,5 +444,5 @@ function createPlatform(home: string) {
     spawn: () => unusedProcess,
     terminateTree: async () => undefined,
   };
-  return createMacPlatform(runtime);
+  return selectHostPlatform(process.platform === "win32" ? "win32" : "darwin", runtime);
 }
