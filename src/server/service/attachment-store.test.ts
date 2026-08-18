@@ -296,6 +296,61 @@ describe("AttachmentStore files", () => {
     );
     expect(await sessionFiles(project, session.id)).toEqual([]);
   });
+
+  test("prepares only complete files for the matching thread working directory", async () => {
+    const { project, dataDirectory, platform } = await fixture();
+    const store = track(new AttachmentStore(platform, dataDirectory));
+    const empty = await store.create(project);
+    await expect(store.prepareForTurn(empty.id, project)).rejects.toMatchObject({
+      code: "invalidAttachment",
+    });
+    await store.cancel(empty.id);
+
+    const session = await store.create(project);
+    await store.addFile(session.id, "notes.ts", "text/plain", byteStream([bytes("hello")]));
+    await expect(store.prepareForTurn(session.id, await temporaryDirectory("other-project-")))
+      .rejects.toMatchObject({ code: "invalidAttachment" });
+    const prepared = await store.prepareForTurn(session.id, project);
+
+    expect(prepared.sessionId).toBe(session.id);
+    expect(prepared.attachments.map(({ path: _path, ...attachment }) => attachment)).toEqual([{
+      name: "notes.ts",
+      size: 5,
+      kind: "text",
+    }]);
+    expect(prepared.attachments[0]?.path.startsWith(path.join(
+      await realpath(project),
+      ".codex-web",
+      "attachments",
+      session.id,
+    ))).toBe(true);
+    await store.releaseTurn(session.id);
+    await expect(store.removeFile(
+      session.id,
+      (await store.getSession(session.id)).attachments[0]!.id,
+    )).resolves.toBeUndefined();
+  });
+
+  test("cleans a bound turn once and handles a terminal event racing before bind", async () => {
+    const { project, dataDirectory, platform } = await fixture();
+    const store = track(new AttachmentStore(platform, dataDirectory));
+    const first = await store.create(project);
+    await store.addFile(first.id, "one.txt", "text/plain", byteStream([bytes("one")]));
+    await store.prepareForTurn(first.id, project);
+    await store.bindTurn(first.id, "thread-1", "turn-1");
+    await store.completeTurn("thread-1", "turn-1");
+    await store.completeTurn("thread-1", "turn-1");
+    await expect(access(path.join(project, ".codex-web", "attachments", first.id)))
+      .rejects.toBeDefined();
+
+    const raced = await store.create(project);
+    await store.addFile(raced.id, "two.txt", "text/plain", byteStream([bytes("two")]));
+    await store.prepareForTurn(raced.id, project);
+    await store.completeTurn("thread-2", "turn-2");
+    await store.bindTurn(raced.id, "thread-2", "turn-2");
+    await expect(access(path.join(project, ".codex-web", "attachments", raced.id)))
+      .rejects.toBeDefined();
+  });
 });
 
 function track(store: AttachmentStore): AttachmentStore {

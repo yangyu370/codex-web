@@ -18,7 +18,7 @@ export interface BrowserActions {
   startThread(params: { cwd: string; model?: string }): Promise<unknown>;
   resumeThread(threadId: string): Promise<unknown>;
   readThread(threadId: string): Promise<unknown>;
-  startTurn(threadId: string, text: string): Promise<unknown>;
+  startTurn(threadId: string, text: string, attachmentSessionId?: string): Promise<unknown>;
   interruptTurn(threadId: string, turnId: string): Promise<unknown>;
   resolveApproval(id: string, decision: string, deviceId: string): void;
 }
@@ -109,9 +109,13 @@ export class BrowserGateway {
       case "thread.read":
         return this.#actions.readThread(requiredString(request.params, "threadId"));
       case "turn.start":
+        if (typeof request.params.text !== "string") {
+          throw new Error("invalidRequest: text is required");
+        }
         return this.#actions.startTurn(
           requiredString(request.params, "threadId"),
-          requiredString(request.params, "text"),
+          request.params.text,
+          optionalString(request.params.attachmentSessionId),
         );
       case "turn.interrupt":
         return this.#actions.interruptTurn(
@@ -190,6 +194,10 @@ function errorCode(message: string): WebErrorCode {
     "compatibilityError",
     "interrupted",
     "alreadyResolved",
+    "invalidAttachment",
+    "attachmentTooLarge",
+    "attachmentCapacity",
+    "attachmentExpired",
   ];
   return codes.find((code) => message.includes(code)) ?? "internalError";
 }
@@ -202,6 +210,14 @@ function safeMessage(code: WebErrorCode): string {
       return "The request is invalid.";
     case "invalidWorkingDirectory":
       return "The working directory is unavailable.";
+    case "invalidAttachment":
+      return "The attachment request is invalid.";
+    case "attachmentTooLarge":
+      return "An attachment exceeds the allowed size.";
+    case "attachmentCapacity":
+      return "Attachment capacity was reached.";
+    case "attachmentExpired":
+      return "The attachment session expired.";
     case "notReady":
       return "Codex is still starting.";
     case "codexUnavailable":

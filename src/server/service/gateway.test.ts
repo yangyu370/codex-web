@@ -135,6 +135,29 @@ describe("BrowserGateway", () => {
     });
   });
 
+  test("passes only an optional opaque attachment session id to turn start", async () => {
+    const state = new WebState("macos");
+    const calls: unknown[] = [];
+    const gateway = new BrowserGateway(state, actions({
+      startTurn: async (...args) => { calls.push(args); return { id: "turn1" }; },
+    }));
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(request("turn.start", {
+      threadId: "t1",
+      text: "Review these",
+      attachmentSessionId: "11111111-1111-4111-8111-111111111111",
+      paths: ["/must/not/pass"],
+    }), (message) => sent.push(message));
+
+    expect(calls).toEqual([[
+      "t1",
+      "Review these",
+      "11111111-1111-4111-8111-111111111111",
+    ]]);
+    expect(sent[0]).toMatchObject({ kind: "response", id: "r1", result: { id: "turn1" } });
+  });
+
   test("replays retained events and falls back to a snapshot after expiry", () => {
     const state = new WebState("macos");
     const gateway = new BrowserGateway(state, actions(), {

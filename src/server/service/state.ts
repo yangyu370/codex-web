@@ -311,6 +311,12 @@ export class WebState {
     return this.#diagnostics.slice();
   }
 
+  threadWorkingDirectory(threadId: string): string {
+    const cwd = this.#threads.find((thread) => thread.id === threadId)?.cwd;
+    if (!cwd) throw new Error("invalidRequest: thread working directory is unavailable");
+    return cwd;
+  }
+
   #upsertThread(thread: ThreadSummary): void {
     const bounded = boundThread(thread)[0];
     if (!bounded) return;

@@ -13,6 +13,7 @@ import { WebState } from "./service/state";
 import { SettingsStore } from "./service/settings";
 import { LocalEventLog, secretEnvironmentValues } from "./service/local-log";
 import { AttachmentStore } from "./service/attachment-store";
+import { TurnCoordinator } from "./service/turn-coordinator";
 
 const hostname = "127.0.0.1";
 const port = parsePort(process.env.CODEX_WEB_PORT);
@@ -36,6 +37,9 @@ function readyAdapter(): CodexAdapter {
   return adapter;
 }
 
+const attachments = new AttachmentStore(platform, platform.dataDirectory());
+const coordinator = new TurnCoordinator(state, attachments, readyAdapter);
+
 const actions: BrowserActions = {
   listDirectory: (directory) => directories.list(directory),
   models: () => readyAdapter().models(),
@@ -43,14 +47,14 @@ const actions: BrowserActions = {
   startThread: (params) => readyAdapter().startThread(params),
   resumeThread: (threadId) => readyAdapter().resumeThread(threadId),
   readThread: (threadId) => readyAdapter().readThread(threadId),
-  startTurn: (threadId, text) => readyAdapter().startTurn(threadId, text),
+  startTurn: (threadId, text, attachmentSessionId) =>
+    coordinator.start(threadId, text, attachmentSessionId),
   interruptTurn: (threadId, turnId) => readyAdapter().interruptTurn(threadId, turnId),
   resolveApproval: (id, decision, deviceId) =>
     readyAdapter().resolveApproval(id, decision, deviceId),
 };
 const gateway = new BrowserGateway(state, actions);
 const settings = new SettingsStore(platform.dataDirectory());
-const attachments = new AttachmentStore(platform, platform.dataDirectory());
 const lifecycle = createWebSocketLifecycle(gateway);
 const auth = parseAuthConfig(process.env);
 if (auth.mode === "local") {
@@ -147,6 +151,7 @@ async function shutdown(): Promise<void> {
   }
   state.interruptActiveWork();
   await manager.stop();
+  coordinator.close();
   await attachments.close();
   await localLog.flush();
   process.exit(0);

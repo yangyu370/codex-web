@@ -27,6 +27,10 @@ export interface WorkingDirectoryValidator {
   validateWorkingDirectory(input: string): Promise<ValidatedPath>;
 }
 
+export type NativeTurnInput =
+  | { type: "text"; text: string }
+  | { type: "localImage"; path: string };
+
 export class CodexAdapter {
   readonly #rpc: RpcClient;
   readonly #state: WebState;
@@ -148,15 +152,19 @@ export class CodexAdapter {
 
   async startTurn(
     threadId: string,
-    text: string,
+    input: NativeTurnInput[],
   ): Promise<{ id: string; threadId: string; status: "inProgress" }> {
-    if (!text.trim()) {
+    if (
+      input.length === 0 ||
+      !input.some((item) => item.type === "text" && item.text.trim()) ||
+      input.some((item) => item.type === "localImage" && !item.path)
+    ) {
       throw new Error("invalidRequest: turn text is empty");
     }
     const response = record(
       await this.#request("turn/start", {
         threadId,
-        input: [{ type: "text", text }],
+        input,
       }),
       "turn/start response",
     );

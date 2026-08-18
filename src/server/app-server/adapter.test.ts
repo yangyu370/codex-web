@@ -587,12 +587,18 @@ describe("CodexAdapter", () => {
       { turn: { id: "turn2", status: "inProgress", items: [] } },
       {
         threadId: "t1",
-        input: [{ type: "text", text: "Run tests" }],
+        input: [
+          { type: "text", text: "Run tests" },
+          { type: "localImage", path: "/work/.codex-web/attachments/s/image.png" },
+        ],
       },
     );
     const state = new WebState("macos");
     const startAdapter = new CodexAdapter(startRpc, state);
-    await expect(startAdapter.startTurn("t1", "Run tests")).resolves.toEqual({
+    await expect(startAdapter.startTurn("t1", [
+      { type: "text", text: "Run tests" },
+      { type: "localImage", path: "/work/.codex-web/attachments/s/image.png" },
+    ])).resolves.toEqual({
       id: "turn2",
       threadId: "t1",
       status: "inProgress",

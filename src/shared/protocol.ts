@@ -29,6 +29,10 @@ export type WebErrorCode =
   | "compatibilityError"
   | "interrupted"
   | "alreadyResolved"
+  | "invalidAttachment"
+  | "attachmentTooLarge"
+  | "attachmentCapacity"
+  | "attachmentExpired"
   | "internalError";
 
 export interface WebError {

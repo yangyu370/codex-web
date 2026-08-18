@@ -22,6 +22,12 @@ import type {
 import type { HostPlatform } from "../platform";
 import { AttachmentError } from "./attachment-error";
 import { classifyAttachment, sanitizeAttachmentName } from "./attachment-files";
+import type { PreparedAttachmentSession } from "./turn-coordinator";
+import {
+  parseStoredSession,
+  type StoredAttachment,
+  type StoredAttachmentSession as StoredSession,
+} from "./attachment-registry";
 
 export { AttachmentError } from "./attachment-error";
 
@@ -30,6 +36,8 @@ const DEFAULT_SWEEP_INTERVAL_MS = 600_000;
 const DEFAULT_MAX_SESSIONS = 100;
 const MAX_REGISTRY_BYTES = 1_048_576;
 const DEFAULT_MAX_HOST_BYTES = 524_288_000;
+const MAX_TERMINAL_TURNS = 256;
+const TERMINAL_TURN_TTL_MS = 3_600_000;
 const MAX_PATH_BYTES = 4_096;
 const MARKER_NAME = ".codex-web-owner.json";
 const REGISTRY_NAME = "attachment-sessions.json";
@@ -50,26 +58,6 @@ export interface AttachmentStoreOptions {
   maxHostBytes?: number;
 }
 
-interface StoredAttachment extends AttachmentSummary {
-  storedName: string;
-}
-
-interface StoredSession {
-  id: string;
-  cwd: string;
-  canonicalCwd: string;
-  directory: string;
-  attachmentsRoot: string;
-  projectContainer: string;
-  ownerNonce: string;
-  createdProjectContainer: boolean;
-  createdAt: number;
-  expiresAt: number;
-  state: "draft" | "starting" | "consumed";
-  totalBytes: number;
-  files: StoredAttachment[];
-}
-
 interface OwnershipMarker {
   version: 1;
   nonce: string;
@@ -85,6 +73,7 @@ export class AttachmentStore {
   readonly #limits: AttachmentLimits;
   readonly #maxHostBytes: number;
   readonly #sessions = new Map<string, StoredSession>();
+  readonly #terminalTurns = new Map<string, number>();
   readonly #timer: ReturnType<typeof setInterval>;
   #initialization?: Promise<void>;
   #mutationTail: Promise<void> = Promise.resolve();
@@ -112,45 +101,47 @@ export class AttachmentStore {
   async create(cwd: string): Promise<AttachmentSessionSummary> {
     this.#assertOpen();
     await this.#initialize();
-    await this.sweepExpired();
-    if (this.#sessions.size >= this.#maxSessions) {
-      throw new AttachmentError("attachmentCapacity", "attachment session capacity reached");
-    }
+    return this.#withMutationLock(async () => {
+      await this.#sweepExpiredUnlocked();
+      if (this.#sessions.size >= this.#maxSessions) {
+        throw new AttachmentError("attachmentCapacity", "attachment session capacity reached");
+      }
 
-    const validated = await this.#platform.validateWorkingDirectory(cwd);
-    const root = await this.#ensureAttachmentsRoot(validated.resolvedPath);
-    const id = crypto.randomUUID();
-    const directory = this.#path().join(root.attachmentsRoot, id);
-    try {
-      await mkdir(directory, { mode: 0o700 });
-    } catch {
-      throw new AttachmentError("invalidAttachment", "could not create attachment session");
-    }
-    const createdAt = this.#now();
-    const session: StoredSession = {
-      id,
-      cwd: validated.displayPath,
-      canonicalCwd: validated.resolvedPath,
-      directory,
-      attachmentsRoot: root.attachmentsRoot,
-      projectContainer: root.projectContainer,
-      ownerNonce: root.marker.nonce,
-      createdProjectContainer: root.marker.createdProjectContainer,
-      createdAt,
-      expiresAt: createdAt + this.#ttlMs,
-      state: "draft",
-      totalBytes: 0,
-      files: [],
-    };
-    this.#sessions.set(id, session);
-    try {
-      await this.#persist();
-    } catch (error) {
-      this.#sessions.delete(id);
-      await rm(directory, { force: true, recursive: true }).catch(() => undefined);
-      throw error;
-    }
-    return this.#summary(session);
+      const validated = await this.#platform.validateWorkingDirectory(cwd);
+      const root = await this.#ensureAttachmentsRoot(validated.resolvedPath);
+      const id = crypto.randomUUID();
+      const directory = this.#path().join(root.attachmentsRoot, id);
+      try {
+        await mkdir(directory, { mode: 0o700 });
+      } catch {
+        throw new AttachmentError("invalidAttachment", "could not create attachment session");
+      }
+      const createdAt = this.#now();
+      const session: StoredSession = {
+        id,
+        cwd: validated.displayPath,
+        canonicalCwd: validated.resolvedPath,
+        directory,
+        attachmentsRoot: root.attachmentsRoot,
+        projectContainer: root.projectContainer,
+        ownerNonce: root.marker.nonce,
+        createdProjectContainer: root.marker.createdProjectContainer,
+        createdAt,
+        expiresAt: createdAt + this.#ttlMs,
+        state: "draft",
+        totalBytes: 0,
+        files: [],
+      };
+      this.#sessions.set(id, session);
+      try {
+        await this.#persist();
+      } catch (error) {
+        this.#sessions.delete(id);
+        await rm(directory, { force: true, recursive: true }).catch(() => undefined);
+        throw error;
+      }
+      return this.#summary(session);
+    });
   }
 
   async cancel(sessionId: string): Promise<void> {
@@ -304,9 +295,135 @@ export class AttachmentStore {
     });
   }
 
+  async prepareForTurn(sessionId: string, cwd: string): Promise<PreparedAttachmentSession> {
+    this.#assertSessionId(sessionId);
+    await this.#initialize();
+    return this.#withMutationLock(async () => {
+      const session = this.#requireDraftSession(sessionId);
+      await this.#validateSession(session);
+      const validatedCwd = await this.#platform.validateWorkingDirectory(cwd);
+      if (!this.#equal(validatedCwd.resolvedPath, session.canonicalCwd)) {
+        throw new AttachmentError("invalidAttachment", "attachment project does not match thread");
+      }
+      if (session.files.length === 0) {
+        throw new AttachmentError("invalidAttachment", "attachment session is empty");
+      }
+      if (session.files.length > this.#limits.files || session.totalBytes > this.#limits.totalBytes) {
+        throw new AttachmentError("attachmentCapacity", "attachment session exceeds its limits");
+      }
+      const attachments = [];
+      let totalBytes = 0;
+      for (const attachment of session.files) {
+        const filePath = this.#path().join(session.directory, attachment.storedName);
+        const info = await lstat(filePath).catch(() => undefined);
+        const canonicalFile = await realpath(filePath).catch(() => undefined);
+        if (
+          !info?.isFile() ||
+          info.isSymbolicLink() ||
+          info.size !== attachment.size ||
+          !canonicalFile ||
+          !this.#equal(canonicalFile, filePath)
+        ) {
+          throw new AttachmentError("invalidAttachment", "attachment file changed");
+        }
+        totalBytes += info.size;
+        attachments.push({
+          name: attachment.name,
+          size: attachment.size,
+          kind: attachment.kind,
+          path: filePath,
+        });
+      }
+      if (totalBytes !== session.totalBytes) {
+        throw new AttachmentError("invalidAttachment", "attachment byte total changed");
+      }
+      session.state = "starting";
+      try {
+        await this.#persist();
+      } catch (error) {
+        session.state = "draft";
+        throw error;
+      }
+      return { sessionId, attachments };
+    });
+  }
+
+  async releaseTurn(sessionId: string): Promise<void> {
+    this.#assertSessionId(sessionId);
+    await this.#initialize();
+    await this.#withMutationLock(async () => {
+      const session = this.#requireSession(sessionId);
+      if (session.state === "draft") return;
+      if (session.state !== "starting") {
+        throw new AttachmentError("attachmentExpired", "attachment session is already consumed");
+      }
+      session.state = "draft";
+      await this.#persist();
+    });
+  }
+
+  async bindTurn(sessionId: string, threadId: string, turnId: string): Promise<void> {
+    this.#assertSessionId(sessionId);
+    if (!threadId || !turnId || byteLength(threadId) > 512 || byteLength(turnId) > 512) {
+      throw new AttachmentError("invalidAttachment", "turn binding is invalid");
+    }
+    await this.#initialize();
+    await this.#withMutationLock(async () => {
+      const session = this.#requireSession(sessionId);
+      if (session.state !== "starting") {
+        throw new AttachmentError("attachmentExpired", "attachment session cannot be bound");
+      }
+      const key = turnKey(threadId, turnId);
+      this.#pruneTerminalTurns();
+      if (this.#terminalTurns.delete(key)) {
+        await this.#deleteSession(session);
+        return;
+      }
+      session.state = "consumed";
+      session.boundThreadId = threadId;
+      session.boundTurnId = turnId;
+      try {
+        await this.#persist();
+      } catch (error) {
+        session.state = "starting";
+        delete session.boundThreadId;
+        delete session.boundTurnId;
+        throw error;
+      }
+    });
+  }
+
+  async completeTurn(threadId: string, turnId: string): Promise<void> {
+    if (!threadId || !turnId) return;
+    await this.#initialize();
+    await this.#withMutationLock(async () => {
+      const session = [...this.#sessions.values()].find((candidate) =>
+        candidate.state === "consumed" &&
+        candidate.boundThreadId === threadId &&
+        candidate.boundTurnId === turnId,
+      );
+      if (session) {
+        await this.#deleteSession(session);
+        return;
+      }
+      this.#pruneTerminalTurns();
+      this.#terminalTurns.delete(turnKey(threadId, turnId));
+      this.#terminalTurns.set(turnKey(threadId, turnId), this.#now());
+      while (this.#terminalTurns.size > MAX_TERMINAL_TURNS) {
+        const oldest = this.#terminalTurns.keys().next().value;
+        if (typeof oldest !== "string") break;
+        this.#terminalTurns.delete(oldest);
+      }
+    });
+  }
+
   async sweepExpired(): Promise<void> {
     if (this.#closed) return;
     await this.#initialize();
+    await this.#withMutationLock(() => this.#sweepExpiredUnlocked());
+  }
+
+  async #sweepExpiredUnlocked(): Promise<void> {
     const expired = [...this.#sessions.values()]
       .filter((session) => session.expiresAt <= this.#now())
       .slice(0, this.#maxSessions);
@@ -325,6 +442,7 @@ export class AttachmentStore {
     this.#closed = true;
     clearInterval(this.#timer);
     await this.#initialization;
+    await this.#mutationTail;
   }
 
   async #initialize(): Promise<void> {
@@ -518,6 +636,14 @@ export class AttachmentStore {
     return [...this.#sessions.values()].reduce((total, session) => total + session.totalBytes, 0);
   }
 
+  #pruneTerminalTurns(): void {
+    const cutoff = this.#now() - TERMINAL_TURN_TTL_MS;
+    for (const [key, timestamp] of this.#terminalTurns) {
+      if (timestamp >= cutoff) break;
+      this.#terminalTurns.delete(key);
+    }
+  }
+
   async #withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.#mutationTail;
     let release: () => void = () => {};
@@ -582,77 +708,6 @@ async function readMarker(markerPath: string): Promise<OwnershipMarker | undefin
   return undefined;
 }
 
-function parseStoredSession(value: unknown, limits: AttachmentLimits): StoredSession | undefined {
-  if (!isRecord(value)) return undefined;
-  if (
-    typeof value.id !== "string" ||
-    !UUID_PATTERN.test(value.id) ||
-    !boundedString(value.cwd) ||
-    !boundedString(value.canonicalCwd) ||
-    !boundedString(value.directory) ||
-    !boundedString(value.attachmentsRoot) ||
-    !boundedString(value.projectContainer) ||
-    typeof value.ownerNonce !== "string" ||
-    !UUID_PATTERN.test(value.ownerNonce) ||
-    typeof value.createdProjectContainer !== "boolean" ||
-    !safeTimestamp(value.createdAt) ||
-    !safeTimestamp(value.expiresAt) ||
-    (value.state !== "draft" && value.state !== "starting" && value.state !== "consumed") ||
-    typeof value.totalBytes !== "number" ||
-    !Number.isSafeInteger(value.totalBytes) ||
-    value.totalBytes < 0 ||
-    !Array.isArray(value.files)
-  ) {
-    return undefined;
-  }
-  const files = value.files.map(parseStoredAttachment);
-  if (
-    files.some((file) => !file) ||
-    files.length > limits.files ||
-    files.reduce((total, file) => total + (file?.size ?? 0), 0) !== value.totalBytes ||
-    value.totalBytes > limits.totalBytes
-  ) return undefined;
-  return {
-    id: value.id,
-    cwd: value.cwd,
-    canonicalCwd: value.canonicalCwd,
-    directory: value.directory,
-    attachmentsRoot: value.attachmentsRoot,
-    projectContainer: value.projectContainer,
-    ownerNonce: value.ownerNonce,
-    createdProjectContainer: value.createdProjectContainer,
-    createdAt: value.createdAt,
-    expiresAt: value.expiresAt,
-    state: value.state,
-    totalBytes: value.totalBytes,
-    files: files as StoredAttachment[],
-  };
-}
-
-function parseStoredAttachment(value: unknown): StoredAttachment | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== "string" ||
-    !UUID_PATTERN.test(value.id) ||
-    typeof value.name !== "string" ||
-    byteLength(value.name) > 120 ||
-    typeof value.storedName !== "string" ||
-    byteLength(value.storedName) > 180 ||
-    value.storedName !== `${value.id}-${value.name}` ||
-    typeof value.size !== "number" ||
-    !Number.isSafeInteger(value.size) ||
-    value.size < 0 ||
-    (value.kind !== "text" && value.kind !== "pdf" && value.kind !== "image")
-  ) return undefined;
-  return {
-    id: value.id,
-    name: value.name,
-    storedName: value.storedName,
-    size: value.size,
-    kind: value.kind,
-  };
-}
-
 async function writeAll(
   handle: Awaited<ReturnType<typeof open>>,
   chunk: Uint8Array,
@@ -679,14 +734,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function boundedString(value: unknown): value is string {
-  return typeof value === "string" && byteLength(value) <= MAX_PATH_BYTES;
-}
-
-function safeTimestamp(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
+}
+
+function turnKey(threadId: string, turnId: string): string {
+  return `${threadId}\u0000${turnId}`;
 }
