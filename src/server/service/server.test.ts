@@ -12,6 +12,7 @@ import {
   createWebRequestHandler,
   createWebSocketLifecycle,
 } from "./server";
+import { AttachmentError } from "./attachment-store";
 
 const localAuth = {
   mode: "local" as const,
@@ -185,6 +186,175 @@ describe("web request authentication", () => {
     }));
 
     expect(response.status).toBe(413);
+  });
+});
+
+describe("attachment HTTP API", () => {
+  const sessionId = "11111111-1111-4111-8111-111111111111";
+  const fileId = "22222222-2222-4222-8222-222222222222";
+
+  test("creates, uploads, removes, and cancels through authenticated routes", async () => {
+    const calls: unknown[] = [];
+    const handler = createWebRequestHandler({
+      auth: localAuth,
+      state: new WebState("macos"),
+      attachments: {
+        create: async (cwd) => {
+          calls.push(["create", cwd]);
+          return {
+            id: sessionId,
+            expiresAt: 1_700_003_600,
+            limits: { files: 10, fileBytes: 20_971_520, totalBytes: 52_428_800 },
+          };
+        },
+        addFile: async (id, name, mediaType, body, declaredLength) => {
+          calls.push(["upload", id, name, mediaType, declaredLength, await Bun.readableStreamToText(body)]);
+          return { id: fileId, name: "notes.ts", size: 5, kind: "text" };
+        },
+        removeFile: async (id, attachmentId) => { calls.push(["remove", id, attachmentId]); },
+        cancel: async (id) => { calls.push(["cancel", id]); },
+      },
+    });
+    const origin = "http://127.0.0.1:4173";
+
+    const created = await handler(new Request(`${origin}/api/attachment-sessions`, {
+      method: "POST",
+      headers: { Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: "/server/project" }),
+    }));
+    const uploaded = await handler(new Request(
+      `${origin}/api/attachment-sessions/${sessionId}/files?name=notes.ts`,
+      {
+        method: "POST",
+        headers: {
+          Origin: origin,
+          "Content-Type": "application/octet-stream",
+          "Content-Length": "0",
+        },
+        body: "hello",
+      },
+    ));
+    const removed = await handler(new Request(
+      `${origin}/api/attachment-sessions/${sessionId}/files/${fileId}`,
+      { method: "DELETE", headers: { Origin: origin } },
+    ));
+    const cancelled = await handler(new Request(
+      `${origin}/api/attachment-sessions/${sessionId}`,
+      { method: "DELETE", headers: { Origin: origin } },
+    ));
+
+    expect([created.status, uploaded.status, removed.status, cancelled.status]).toEqual([
+      201, 201, 204, 204,
+    ]);
+    expect(await created.json()).toEqual({
+      id: sessionId,
+      expiresAt: 1_700_003_600,
+      limits: { files: 10, fileBytes: 20_971_520, totalBytes: 52_428_800 },
+    });
+    expect(await uploaded.json()).toEqual({
+      id: fileId,
+      name: "notes.ts",
+      size: 5,
+      kind: "text",
+    });
+    expect(calls).toEqual([
+      ["create", "/server/project"],
+      ["upload", sessionId, "notes.ts", "application/octet-stream", 0, "hello"],
+      ["remove", sessionId, fileId],
+      ["cancel", sessionId],
+    ]);
+  });
+
+  test("authorizes before reading an attachment body", async () => {
+    let invoked = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() {},
+    });
+    const handler = createWebRequestHandler({
+      auth: localAuth,
+      state: new WebState("macos"),
+      attachments: {
+        create: async () => { throw new Error("unused"); },
+        addFile: async () => { invoked = true; throw new Error("must not upload"); },
+        removeFile: async () => undefined,
+        cancel: async () => undefined,
+      },
+    });
+    const response = await handler(new Request(
+      `http://127.0.0.1:4173/api/attachment-sessions/${sessionId}/files?name=a.ts`,
+      {
+        method: "POST",
+        headers: { Origin: "https://evil.example" },
+        body,
+        duplex: "half",
+      } as RequestInit,
+    ));
+
+    expect(response.status).toBe(403);
+    expect(invoked).toBe(false);
+  });
+
+  test("rejects malformed routes and missing upload inputs without invoking storage", async () => {
+    let invoked = false;
+    const handler = createWebRequestHandler({
+      auth: localAuth,
+      state: new WebState("macos"),
+      attachments: {
+        create: async () => { invoked = true; throw new Error("unused"); },
+        addFile: async () => { invoked = true; throw new Error("unused"); },
+        removeFile: async () => { invoked = true; },
+        cancel: async () => { invoked = true; },
+      },
+    });
+    const origin = "http://127.0.0.1:4173";
+    const responses = await Promise.all([
+      handler(new Request(`${origin}/api/attachment-sessions/not-an-id/files?name=a.ts`, {
+        method: "POST", headers: { Origin: origin }, body: "x",
+      })),
+      handler(new Request(`${origin}/api/attachment-sessions/${sessionId}/files`, {
+        method: "POST", headers: { Origin: origin }, body: "x",
+      })),
+      handler(new Request(`${origin}/api/attachment-sessions/${sessionId}/files?name=a.ts`, {
+        method: "POST", headers: { Origin: origin },
+      })),
+      handler(new Request(`${origin}/api/attachment-sessions`, {
+        method: "GET", headers: { Origin: origin },
+      })),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([404, 400, 400, 405]);
+    expect(responses[3]?.headers.get("Allow")).toBe("POST");
+    expect(invoked).toBe(false);
+  });
+
+  test("maps bounded attachment failures without exposing server paths", async () => {
+    const handler = createWebRequestHandler({
+      auth: localAuth,
+      state: new WebState("macos"),
+      attachments: {
+        create: async () => {
+          throw new AttachmentError(
+            "attachmentTooLarge",
+            "secret path /Users/owner/private/project/file.txt",
+          );
+        },
+        addFile: async () => { throw new Error("unused"); },
+        removeFile: async () => undefined,
+        cancel: async () => undefined,
+      },
+    });
+    const response = await handler(new Request("http://127.0.0.1:4173/api/attachment-sessions", {
+      method: "POST",
+      headers: { Origin: "http://127.0.0.1:4173", "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: "/server/project" }),
+    }));
+    const source = await response.text();
+
+    expect(response.status).toBe(413);
+    expect(source).not.toContain("/Users/owner");
+    expect(JSON.parse(source)).toMatchObject({
+      error: { code: "attachmentTooLarge", retryable: false },
+    });
   });
 });
 

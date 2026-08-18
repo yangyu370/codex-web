@@ -12,6 +12,7 @@ import { createBunFetchHandler, createWebSocketLifecycle } from "./service/serve
 import { WebState } from "./service/state";
 import { SettingsStore } from "./service/settings";
 import { LocalEventLog, secretEnvironmentValues } from "./service/local-log";
+import { AttachmentStore } from "./service/attachment-store";
 
 const hostname = "127.0.0.1";
 const port = parsePort(process.env.CODEX_WEB_PORT);
@@ -49,6 +50,7 @@ const actions: BrowserActions = {
 };
 const gateway = new BrowserGateway(state, actions);
 const settings = new SettingsStore(platform.dataDirectory());
+const attachments = new AttachmentStore(platform, platform.dataDirectory());
 const lifecycle = createWebSocketLifecycle(gateway);
 const auth = parseAuthConfig(process.env);
 if (auth.mode === "local") {
@@ -61,6 +63,7 @@ const fetch = createBunFetchHandler({
   gateway,
   staticRoot: path.resolve(import.meta.dir, "../../dist"),
   settings,
+  attachments,
 });
 
 manager.onState((snapshot) => {
@@ -144,6 +147,7 @@ async function shutdown(): Promise<void> {
   }
   state.interruptActiveWork();
   await manager.stop();
+  await attachments.close();
   await localLog.flush();
   process.exit(0);
 }

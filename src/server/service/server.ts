@@ -1,11 +1,36 @@
 import type { AuthConfig, RemoteAuthConfig } from "../auth/config";
 import { verifyCloudflareToken } from "../auth/cloudflare";
 import { authorizeLocalRequest } from "../auth/local";
-import { encodeServerMessage } from "../../shared/protocol";
+import {
+  encodeServerMessage,
+  type AttachmentSessionSummary,
+  type AttachmentSummary,
+} from "../../shared/protocol";
 import type { BrowserGateway } from "./gateway";
 import type { WebState } from "./state";
 import type { UserSettings } from "./settings";
+import { AttachmentError } from "./attachment-error";
 import path from "node:path";
+
+const ATTACHMENT_SESSION_PATH = "/api/attachment-sessions";
+const UUID_SOURCE = "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const ATTACHMENT_ROUTE = new RegExp(
+  `^${ATTACHMENT_SESSION_PATH}/(${UUID_SOURCE})(?:/files(?:/(${UUID_SOURCE}))?)?$`,
+  "i",
+);
+
+export interface AttachmentHttpStore {
+  create(cwd: string): Promise<AttachmentSessionSummary>;
+  addFile(
+    sessionId: string,
+    name: string,
+    mediaType: string,
+    body: ReadableStream<Uint8Array>,
+    declaredLength?: number,
+  ): Promise<AttachmentSummary>;
+  removeFile(sessionId: string, attachmentId: string): Promise<void>;
+  cancel(sessionId: string): Promise<void>;
+}
 
 export interface WebRequestHandlerDependencies {
   auth: AuthConfig;
@@ -16,6 +41,7 @@ export interface WebRequestHandlerDependencies {
     read(): Promise<UserSettings>;
     save(value: UserSettings): Promise<void>;
   };
+  attachments?: AttachmentHttpStore;
 }
 
 export function createWebRequestHandler(
@@ -44,6 +70,12 @@ export function createWebRequestHandler(
     }
     if (url.pathname === "/api/bootstrap") {
       return json(dependencies.state.snapshot());
+    }
+    if (
+      dependencies.attachments &&
+      (url.pathname === ATTACHMENT_SESSION_PATH || url.pathname.startsWith(`${ATTACHMENT_SESSION_PATH}/`))
+    ) {
+      return handleAttachmentRequest(request, url, dependencies.attachments);
     }
     if (url.pathname === "/api/settings" && dependencies.settings) {
       if (request.method === "GET") return json(await dependencies.settings.read());
@@ -75,6 +107,77 @@ export function createWebRequestHandler(
       ? serveStatic(dependencies.staticRoot, url.pathname)
       : new Response("Not found", { status: 404 });
   };
+}
+
+async function handleAttachmentRequest(
+  request: Request,
+  url: URL,
+  attachments: AttachmentHttpStore,
+): Promise<Response> {
+  try {
+    if (url.pathname === ATTACHMENT_SESSION_PATH) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      let value: unknown;
+      try {
+        value = JSON.parse(await readBoundedText(request, 8_192));
+      } catch {
+        return json(httpError("invalidAttachment", "Attachment request is invalid"), 400);
+      }
+      if (!isRecord(value) || typeof value.cwd !== "string" || byteLength(value.cwd) > 4_096) {
+        return json(httpError("invalidAttachment", "Attachment request is invalid"), 400);
+      }
+      return json(await attachments.create(value.cwd), 201);
+    }
+
+    const match = ATTACHMENT_ROUTE.exec(url.pathname);
+    if (!match) return json(httpError("invalidRequest", "Not found"), 404);
+    const sessionId = match[1]!;
+    const attachmentId = match[2];
+    if (attachmentId) {
+      if (request.method !== "DELETE") return methodNotAllowed("DELETE");
+      await attachments.removeFile(sessionId, attachmentId);
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname.endsWith("/files")) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      const name = url.searchParams.get("name");
+      if (!name || byteLength(name) > 4_096 || !request.body) {
+        return json(httpError("invalidAttachment", "Attachment request is invalid"), 400);
+      }
+      const rawLength = request.headers.get("content-length");
+      const declaredLength = rawLength === null ? undefined : Number(rawLength);
+      const result = await attachments.addFile(
+        sessionId,
+        name,
+        request.headers.get("content-type") ?? "application/octet-stream",
+        request.body,
+        declaredLength,
+      );
+      return json(result, 201);
+    }
+    if (request.method !== "DELETE") return methodNotAllowed("DELETE");
+    await attachments.cancel(sessionId);
+    return new Response(null, { status: 204 });
+  } catch (error) {
+    return attachmentErrorResponse(error);
+  }
+}
+
+function attachmentErrorResponse(error: unknown): Response {
+  if (!(error instanceof AttachmentError)) {
+    return json(httpError("internalError", "Attachment operation failed"), 500);
+  }
+  const mapped = {
+    invalidAttachment: { status: 400, message: "Attachment request is invalid" },
+    attachmentTooLarge: { status: 413, message: "Attachment exceeds the allowed size" },
+    attachmentCapacity: { status: 429, message: "Attachment capacity reached" },
+    attachmentExpired: { status: 410, message: "Attachment session expired" },
+  }[error.code];
+  return json(httpError(error.code, mapped.message), mapped.status);
+}
+
+function methodNotAllowed(allow: string): Response {
+  return new Response(null, { status: 405, headers: { Allow: allow } });
 }
 
 export async function authorizeWebRequest(
@@ -260,4 +363,8 @@ function contentType(filePath: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }
