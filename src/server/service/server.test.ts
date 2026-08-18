@@ -196,6 +196,7 @@ describe("Bun WebSocket lifecycle", () => {
       auth: localAuth,
       state,
       gateway: new BrowserGateway(state, {
+        listDirectory: async () => ({ current: { name: "work", path: "/work" }, roots: [], directories: [], truncated: false }),
         models: async () => [],
         listThreads: async () => ({ data: [], nextCursor: null }),
         startThread: async () => ({}),
@@ -223,6 +224,7 @@ describe("Bun WebSocket lifecycle", () => {
   test("sends snapshots and correlated responses through socket handlers", async () => {
     const state = new WebState("macos");
     const gateway = new BrowserGateway(state, {
+      listDirectory: async () => ({ current: { name: "work", path: "/work" }, roots: [], directories: [], truncated: false }),
       models: async () => [],
       listThreads: async () => ({ data: [], nextCursor: null }),
       startThread: async () => ({}),

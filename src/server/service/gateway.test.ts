@@ -6,6 +6,12 @@ import { BrowserGateway, type BrowserActions } from "./gateway";
 
 function actions(overrides: Partial<BrowserActions> = {}): BrowserActions {
   return {
+    listDirectory: async () => ({
+      current: { name: "work", path: "/work" },
+      roots: [{ name: "Home", path: "/work" }],
+      directories: [],
+      truncated: false,
+    }),
     models: async () => [],
     listThreads: async () => ({ data: [], nextCursor: null }),
     startThread: async () => ({ id: "t1" }),
@@ -72,6 +78,42 @@ describe("BrowserGateway", () => {
         },
       },
     ]);
+  });
+
+  test("lists directories from the Codex host with an optional server path", async () => {
+    const state = new WebState("macos");
+    const browserActions = {
+      ...actions(),
+      listDirectory: async (directory?: string) => ({
+        current: { name: "projects", path: directory ?? "/srv/projects" },
+        roots: [{ name: "Projects", path: "/srv/projects" }],
+        directories: [{ name: "codex", path: "/srv/projects/codex" }],
+        truncated: false,
+      }),
+    };
+    const gateway = new BrowserGateway(state, browserActions);
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(
+      JSON.stringify({
+        kind: "request",
+        id: "directory-1",
+        method: "directory.list",
+        params: { path: "/srv/projects" },
+      }),
+      (message) => sent.push(message),
+    );
+
+    expect(sent).toEqual([{
+      kind: "response",
+      id: "directory-1",
+      result: {
+        current: { name: "projects", path: "/srv/projects" },
+        roots: [{ name: "Projects", path: "/srv/projects" }],
+        directories: [{ name: "codex", path: "/srv/projects/codex" }],
+        truncated: false,
+      },
+    }]);
   });
 
   test("returns safe typed errors with a diagnostic id", async () => {

@@ -1,4 +1,4 @@
-import { ArrowUp, FolderGit2, Paperclip, Square } from "lucide-react";
+import { ArrowUp, FolderGit2, FolderOpen, Paperclip, Square } from "lucide-react";
 import { useRef } from "react";
 
 import type { ModelSummary } from "../../shared/protocol";
@@ -13,6 +13,7 @@ interface ComposerProps {
   disabled?: boolean;
   onValueChange: (value: string) => void;
   onCwdChange: (cwd: string) => void;
+  onBrowseDirectory?: () => void;
   onModelChange: (model: string) => void;
   onSend: () => void;
   onInterrupt: () => void;
@@ -28,6 +29,7 @@ export function Composer({
   disabled,
   onValueChange,
   onCwdChange,
+  onBrowseDirectory,
   onModelChange,
   onSend,
   onInterrupt,
@@ -56,9 +58,8 @@ export function Composer({
           <button aria-label="Attach context" className="icon-button" type="button">
             <Paperclip size={15} />
           </button>
-          <label className="composer-control composer-control--cwd">
+          <div className="composer-control composer-control--cwd">
             <FolderGit2 size={14} />
-            <span className="sr-only">Working directory</span>
             <input
               aria-label="Working directory"
               list="recent-directories"
@@ -71,7 +72,17 @@ export function Composer({
                 <option key={directory} value={directory} />
               ))}
             </datalist>
-          </label>
+            <button
+              aria-label="Browse server directories"
+              className="composer-control__browse"
+              disabled={disabled || !onBrowseDirectory}
+              onClick={onBrowseDirectory}
+              title="Choose a folder on the Codex host"
+              type="button"
+            >
+              <FolderOpen size={14} />
+            </button>
+          </div>
           <label className="composer-control">
             <span className="sr-only">Model</span>
             <select

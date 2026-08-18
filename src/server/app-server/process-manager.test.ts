@@ -57,6 +57,7 @@ function fakePlatform(
       return process.child;
     },
     terminateProcessTree: async (process) => onTerminate(process),
+    homeDirectory: () => "/work",
     dataDirectory: () => "/tmp/codex-web",
     diagnostics: async () => ({ platform: "macos", arch: "arm64" }),
   };

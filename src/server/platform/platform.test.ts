@@ -120,17 +120,20 @@ describe("Codex discovery and data directories", () => {
   });
 
   test("uses native default data directories", () => {
-    expect(createMacPlatform(runtime()).dataDirectory()).toBe(
+    const mac = createMacPlatform(runtime());
+    const windows = createWindowsPlatform(
+      runtime({
+        env: { LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local" },
+        homedir: "C:\\Users\\tester",
+      }),
+    );
+
+    expect(mac.dataDirectory()).toBe(
       "/Users/tester/Library/Application Support/codex-web",
     );
-    expect(
-      createWindowsPlatform(
-        runtime({
-          env: { LOCALAPPDATA: "C:\\Users\\tester\\AppData\\Local" },
-          homedir: "C:\\Users\\tester",
-        }),
-      ).dataDirectory(),
-    ).toBe("C:\\Users\\tester\\AppData\\Local\\Codex Web");
+    expect(mac.homeDirectory()).toBe("/Users/tester");
+    expect(windows.dataDirectory()).toBe("C:\\Users\\tester\\AppData\\Local\\Codex Web");
+    expect(windows.homeDirectory()).toBe("C:\\Users\\tester");
   });
 });
 

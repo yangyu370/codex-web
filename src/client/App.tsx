@@ -1,11 +1,12 @@
 import { Activity, MessageSquareText, Rows3 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import type { BrowserSnapshot } from "../shared/protocol";
+import type { BrowserSnapshot, DirectoryListing } from "../shared/protocol";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { AppHeader } from "./components/AppHeader";
 import { Composer } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
+import { DirectoryPicker } from "./components/DirectoryPicker";
 import { ThreadSidebar } from "./components/ThreadSidebar";
 import type { CodexWebClient, ConnectionStatus } from "./websocket";
 import "./styles.css";
@@ -56,6 +57,10 @@ export function App({
   );
   const [mobileView, setMobileView] = useState<"tasks" | "chat" | "activity">("chat");
   const [actionError, setActionError] = useState<string>();
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
+  const [directoryListing, setDirectoryListing] = useState<DirectoryListing>();
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState<string>();
   const [connection, setConnection] = useState<ConnectionStatus>(
     client?.connectionStatus() ?? "connected",
   );
@@ -157,6 +162,24 @@ export function App({
     onNewTask?.();
   }
 
+  async function browseDirectory(path?: string) {
+    if (!client) return;
+    setDirectoryPickerOpen(true);
+    setDirectoryLoading(true);
+    setDirectoryError(undefined);
+    try {
+      const listing = await client.request(
+        "directory.list",
+        path ? { path } : {},
+      ) as DirectoryListing;
+      setDirectoryListing(listing);
+    } catch (error) {
+      setDirectoryError(errorMessage(error));
+    } finally {
+      setDirectoryLoading(false);
+    }
+  }
+
   return (
     <div className="app-shell" data-mobile-view={mobileView}>
       <ThreadSidebar
@@ -197,6 +220,7 @@ export function App({
             models={visibleSnapshot.models}
             recentDirectories={settings.recentDirectories}
             onCwdChange={setCwd}
+            onBrowseDirectory={client ? () => void browseDirectory() : undefined}
             onInterrupt={interrupt}
             onModelChange={setModel}
             onSend={() => void send()}
@@ -212,6 +236,19 @@ export function App({
         onResolveApproval={resolveApproval}
         tokenUsage={visibleSnapshot.tokenUsage}
       />
+      {directoryPickerOpen ? (
+        <DirectoryPicker
+          error={directoryError}
+          listing={directoryListing}
+          loading={directoryLoading}
+          onClose={() => setDirectoryPickerOpen(false)}
+          onNavigate={(path) => void browseDirectory(path)}
+          onSelect={(path) => {
+            setCwd(path);
+            setDirectoryPickerOpen(false);
+          }}
+        />
+      ) : null}
       <nav aria-label="Mobile sections" className="mobile-tabs">
         <button data-active={mobileView === "tasks"} onClick={() => setMobileView("tasks")} type="button">
           <Rows3 size={16} /> Tasks

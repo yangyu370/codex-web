@@ -16,6 +16,19 @@ describe("parseClientMessage", () => {
     });
   });
 
+  test("accepts a server-directory listing request", () => {
+    expect(
+      parseClientMessage(
+        '{"kind":"request","id":"r2","method":"directory.list","params":{"path":"/srv/projects"}}',
+      ),
+    ).toEqual({
+      kind: "request",
+      id: "r2",
+      method: "directory.list",
+      params: { path: "/srv/projects" },
+    });
+  });
+
   test("rejects unknown envelope kinds", () => {
     expect(() => parseClientMessage('{"kind":"raw-app-server"}')).toThrow(
       "invalidRequest",

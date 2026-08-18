@@ -53,6 +53,10 @@ export function createMacPlatform(runtime: PlatformRuntime): HostPlatform {
       return runtime.terminateTree("macos", child);
     },
 
+    homeDirectory() {
+      return runtime.homedir;
+    },
+
     dataDirectory() {
       return path.posix.join(
         runtime.homedir,

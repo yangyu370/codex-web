@@ -31,6 +31,59 @@ const emptySnapshot: BrowserSnapshot = {
 beforeEach(cleanup);
 
 describe("live client workflows", () => {
+  test("browses and selects a project directory on the Codex host", async () => {
+    const socket = new WorkflowSocket();
+    const client = new CodexWebClient(emptySnapshot, () => socket);
+    client.connect();
+    socket.onopen?.();
+    render(<App client={client} initialSnapshot={emptySnapshot} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Browse server directories" }));
+    const rootRequest = JSON.parse(socket.sent[0] ?? "null");
+    expect(rootRequest).toMatchObject({ method: "directory.list", params: {} });
+    act(() => {
+      socket.receive({
+        kind: "response",
+        id: rootRequest.id,
+        result: {
+          current: { name: "developer", path: "/Users/developer" },
+          roots: [{ name: "Home", path: "/Users/developer" }],
+          directories: [{ name: "projects", path: "/Users/developer/projects" }],
+          truncated: false,
+        },
+      });
+    });
+
+    expect(await screen.findByRole("dialog", { name: "Choose a server directory" })).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: /projects/ }));
+    const childRequest = JSON.parse(socket.sent[1] ?? "null");
+    expect(childRequest).toMatchObject({
+      method: "directory.list",
+      params: { path: "/Users/developer/projects" },
+    });
+    act(() => {
+      socket.receive({
+        kind: "response",
+        id: childRequest.id,
+        result: {
+          current: { name: "projects", path: "/Users/developer/projects" },
+          parent: "/Users/developer",
+          roots: [{ name: "Home", path: "/Users/developer" }],
+          directories: [{ name: "codex", path: "/Users/developer/projects/codex" }],
+          truncated: false,
+        },
+      });
+    });
+
+    await screen.findByText("/Users/developer/projects");
+    await user.click(screen.getByRole("button", { name: "Use this folder" }));
+
+    expect((screen.getByRole("combobox", { name: "Working directory" }) as HTMLInputElement).value)
+      .toBe("/Users/developer/projects");
+    expect(screen.queryByRole("dialog", { name: "Choose a server directory" })).toBeNull();
+  });
+
   test("starts a thread before sending the first turn", async () => {
     const socket = new WorkflowSocket();
     const client = new CodexWebClient(emptySnapshot, () => socket);

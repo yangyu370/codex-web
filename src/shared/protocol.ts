@@ -4,6 +4,7 @@ export const MAX_BROWSER_MESSAGE_BYTES = 65_536;
 export const MAX_SERVER_MESSAGE_BYTES = 8_388_608;
 
 export const browserMethods = [
+  "directory.list",
   "model.list",
   "thread.list",
   "thread.start",
@@ -62,6 +63,19 @@ export interface ModelSummary {
   displayName: string;
   description?: string;
   isDefault?: boolean;
+}
+
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface DirectoryListing {
+  current: DirectoryEntry;
+  parent?: string;
+  roots: DirectoryEntry[];
+  directories: DirectoryEntry[];
+  truncated: boolean;
 }
 
 export interface ThreadSummary {

@@ -7,6 +7,18 @@ test("keeps the composer in the initial viewport with a long task history", asyn
   await expect(page.getByRole("textbox", { name: "Message Codex" })).toBeInViewport();
 });
 
+test("selects a working directory from the Codex host", async ({ page }) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Browse server directories" }).click();
+  const dialog = page.getByRole("dialog", { name: "Choose a server directory" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("This path belongs to the machine running Codex.")).toBeVisible();
+  await dialog.getByRole("button", { name: "Use this folder" }).click();
+
+  await expect(page.getByRole("combobox", { name: "Working directory" })).not.toHaveValue("");
+});
+
 test("daily Codex workflow", async ({ page }, testInfo) => {
   await page.goto("/");
   if (testInfo.project.name === "mobile") {

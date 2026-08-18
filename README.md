@@ -24,6 +24,21 @@ On Windows PowerShell:
 
 Open `http://127.0.0.1:4173`. The service always binds to `127.0.0.1`; change the loopback port with `CODEX_WEB_PORT` and add its origin to `CODEX_WEB_LOCAL_ORIGINS` when needed. The launchers preserve the existing `CODEX_HOME` and do not install or upgrade Bun or Codex.
 
+The folder button in the composer browses directories on the machine running
+Codex Web. The service user's home directory is available by default. Add
+other project roots with the native path delimiter:
+
+```sh
+CODEX_WEB_BROWSE_ROOTS=/Volumes/Projects:/opt/work ./scripts/start-macos.sh
+```
+
+```powershell
+$env:CODEX_WEB_BROWSE_ROOTS = 'D:\Projects;\\server\share\work'
+.\scripts\start-windows.ps1
+```
+
+Only configured roots and their descendants are visible in the Web UI.
+
 For Vite hot reload, run `bun run dev:server` and `bun run dev` in separate terminals, then open `http://127.0.0.1:5173`.
 
 ## Remote access
@@ -39,6 +54,9 @@ CODEX_WEB_PUBLIC_URL=https://codex.example.com
 ```
 
 Do not expose the loopback service directly or use a public ingress without Access. The service validates the Access JWT issuer, audience, expiry, owner email, and browser origin.
+
+Directory browsing in remote mode still targets the Codex Web host. It never
+browses the filesystem of the laptop or phone displaying the page.
 
 ## Verification
 

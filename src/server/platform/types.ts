@@ -53,6 +53,7 @@ export interface HostPlatform {
     env: Record<string, string>,
   ): AppServerProcess;
   terminateProcessTree(child: AppServerProcess): Promise<void>;
+  homeDirectory(): string;
   dataDirectory(): string;
   diagnostics(): Promise<{ platform: "macos" | "windows"; arch: string }>;
 }

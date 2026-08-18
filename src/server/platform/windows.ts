@@ -53,6 +53,10 @@ export function createWindowsPlatform(runtime: PlatformRuntime): HostPlatform {
       return runtime.terminateTree("windows", child);
     },
 
+    homeDirectory() {
+      return runtime.homedir;
+    },
+
     dataDirectory() {
       const localAppData = runtime.env.LOCALAPPDATA;
       if (!localAppData) {

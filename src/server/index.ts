@@ -7,6 +7,7 @@ import { parseAuthConfig } from "./auth/config";
 import { selectHostPlatform } from "./platform";
 import { createSystemRuntime } from "./platform/system-runtime";
 import { BrowserGateway, type BrowserActions } from "./service/gateway";
+import { DirectoryService } from "./service/directories";
 import { createBunFetchHandler, createWebSocketLifecycle } from "./service/server";
 import { WebState } from "./service/state";
 import { SettingsStore } from "./service/settings";
@@ -21,6 +22,13 @@ const manager = new AppServerProcessManager(platform, {
   configuredExecutable: process.env.CODEX_WEB_CODEX_EXECUTABLE,
 });
 let adapter: CodexAdapter | undefined;
+const directories = new DirectoryService(
+  platform,
+  (process.env.CODEX_WEB_BROWSE_ROOTS ?? "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean),
+);
 
 function readyAdapter(): CodexAdapter {
   if (!adapter) throw new Error("notReady: Codex app-server is starting");
@@ -28,6 +36,7 @@ function readyAdapter(): CodexAdapter {
 }
 
 const actions: BrowserActions = {
+  listDirectory: (directory) => directories.list(directory),
   models: () => readyAdapter().models(),
   listThreads: (cursor) => readyAdapter().listThreads(cursor),
   startThread: (params) => readyAdapter().startThread(params),

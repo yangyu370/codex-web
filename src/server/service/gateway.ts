@@ -2,6 +2,7 @@ import {
   type BrowserEvent,
   type BrowserRequest,
   type BrowserResponse,
+  type DirectoryListing,
   type ModelSummary,
   parseClientMessage,
   type ServerMessage,
@@ -11,6 +12,7 @@ import {
 import type { WebState } from "./state";
 
 export interface BrowserActions {
+  listDirectory(path?: string): Promise<DirectoryListing>;
   models(): Promise<ModelSummary[]>;
   listThreads(cursor?: string): Promise<{ data: ThreadSummary[]; nextCursor: string | null }>;
   startThread(params: { cwd: string; model?: string }): Promise<unknown>;
@@ -91,6 +93,8 @@ export class BrowserGateway {
 
   async #dispatch(request: BrowserRequest, deviceId: string): Promise<unknown> {
     switch (request.method) {
+      case "directory.list":
+        return this.#actions.listDirectory(optionalString(request.params.path));
       case "model.list":
         return this.#actions.models();
       case "thread.list":

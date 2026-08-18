@@ -11,6 +11,14 @@ if (args[0] !== "app-server" || args[1] !== "--stdio") {
 }
 
 let buffer = "";
+let nextThreadId = 1;
+let nextTurnId = 1;
+let nextApprovalId = 900;
+const pendingApprovals = new Map<string | number, {
+  itemId: string;
+  threadId: string;
+  turnId: string;
+}>();
 const decoder = new TextDecoder();
 for await (const chunk of Bun.stdin.stream()) {
   buffer += decoder.decode(chunk, { stream: true });
@@ -49,9 +57,11 @@ function handle(message: Record<string, unknown>): void {
   }
   if (method === "thread/start") {
     const params = message.params as Record<string, unknown>;
+    const threadId = `thread-e2e-${nextThreadId}`;
+    nextThreadId += 1;
     return respond(id, {
       thread: {
-        id: "thread-e2e",
+        id: threadId,
         name: "Create a file",
         preview: "Create a file",
         createdAt: 1,
@@ -63,54 +73,64 @@ function handle(message: Record<string, unknown>): void {
     });
   }
   if (method === "turn/start") {
-    respond(id, { turn: { id: "turn-e2e", status: "inProgress", items: [] } });
+    const params = message.params as Record<string, unknown>;
+    const threadId = String(params.threadId);
+    const turnId = `turn-e2e-${nextTurnId}`;
+    const itemId = `patch-e2e-${nextTurnId}`;
+    const approvalId = nextApprovalId;
+    nextTurnId += 1;
+    nextApprovalId += 1;
+    pendingApprovals.set(approvalId, { itemId, threadId, turnId });
+    respond(id, { turn: { id: turnId, status: "inProgress", items: [] } });
     notify("item/started", {
-      threadId: "thread-e2e",
-      turnId: "turn-e2e",
-      item: { id: "user-e2e", type: "userMessage", content: [{ type: "text", text: "Create a file" }] },
+      threadId,
+      turnId,
+      item: { id: `user-e2e-${turnId}`, type: "userMessage", content: [{ type: "text", text: "Create a file" }] },
     });
     notify("item/started", {
-      threadId: "thread-e2e",
-      turnId: "turn-e2e",
+      threadId,
+      turnId,
       item: {
-        id: "patch-e2e",
+        id: itemId,
         type: "fileChange",
         status: "inProgress",
         changes: [{ path: "hello.txt", diff: "+hello from Codex Web" }],
       },
     });
     write({
-      id: 900,
+      id: approvalId,
       method: "item/fileChange/requestApproval",
       params: {
-        threadId: "thread-e2e",
-        turnId: "turn-e2e",
-        itemId: "patch-e2e",
+        threadId,
+        turnId,
+        itemId,
         reason: "Create hello.txt",
         availableDecisions: ["accept", "decline"],
       },
     });
     return;
   }
-  if (id === 900 && "result" in message) {
+  const approval = id === undefined ? undefined : pendingApprovals.get(id);
+  if (approval && "result" in message) {
+    pendingApprovals.delete(id!);
     notify("item/completed", {
-      threadId: "thread-e2e",
-      turnId: "turn-e2e",
+      threadId: approval.threadId,
+      turnId: approval.turnId,
       item: {
-        id: "patch-e2e",
+        id: approval.itemId,
         type: "fileChange",
         status: "completed",
         changes: [{ path: "hello.txt", diff: "+hello from Codex Web" }],
       },
     });
     notify("item/completed", {
-      threadId: "thread-e2e",
-      turnId: "turn-e2e",
-      item: { id: "done-e2e", type: "plan", text: "Turn completed" },
+      threadId: approval.threadId,
+      turnId: approval.turnId,
+      item: { id: `done-e2e-${approval.turnId}`, type: "plan", text: "Turn completed" },
     });
     notify("turn/completed", {
-      threadId: "thread-e2e",
-      turn: { id: "turn-e2e", status: "completed" },
+      threadId: approval.threadId,
+      turn: { id: approval.turnId, status: "completed" },
     });
   }
 }
