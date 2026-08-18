@@ -1,5 +1,5 @@
 import { Activity, MessageSquareText, Rows3 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BrowserSnapshot, DirectoryListing } from "../shared/protocol";
 import { ActivityPanel } from "./components/ActivityPanel";
@@ -9,15 +9,24 @@ import { Conversation } from "./components/Conversation";
 import { DirectoryPicker } from "./components/DirectoryPicker";
 import { ThreadSidebar } from "./components/ThreadSidebar";
 import type { CodexWebClient, ConnectionStatus } from "./websocket";
+import {
+  AttachmentClient,
+  type AttachmentTransport,
+  type DraftAttachment,
+  type UploadHandle,
+} from "./attachments";
 import "./styles.css";
+
+const defaultAttachmentClient = new AttachmentClient();
 
 export interface AppProps {
   initialSnapshot: BrowserSnapshot;
   initialSettings?: ClientSettings;
   client?: CodexWebClient;
+  attachmentClient?: AttachmentTransport;
   onSelectThread?: (threadId: string) => void;
   onNewTask?: () => void;
-  onSend?: (input: { text: string; cwd: string; model: string }) => void;
+  onSend?: (input: { text: string; cwd: string; model: string; attachmentSessionId?: string }) => void;
   onInterrupt?: () => void;
   onResolveApproval?: (id: string, decision: string) => void;
   onPersistSettings?: (settings: ClientSettings) => void;
@@ -32,6 +41,7 @@ export function App({
   initialSnapshot,
   initialSettings = { recentDirectories: [] },
   client,
+  attachmentClient = defaultAttachmentClient,
   onSelectThread,
   onNewTask,
   onSend,
@@ -61,6 +71,16 @@ export function App({
   const [directoryListing, setDirectoryListing] = useState<DirectoryListing>();
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState<string>();
+  const [draftAttachments, setDraftAttachments] = useState<DraftAttachment[]>([]);
+  const draftAttachmentsRef = useRef<DraftAttachment[]>([]);
+  const attachmentSessionRef = useRef<
+    Awaited<ReturnType<AttachmentTransport["createSession"]>> | undefined
+  >(undefined);
+  const attachmentSessionPromiseRef = useRef<
+    ReturnType<AttachmentTransport["createSession"]> | undefined
+  >(undefined);
+  const uploadHandlesRef = useRef(new Map<string, UploadHandle>());
+  const attachmentGenerationRef = useRef(0);
   const [connection, setConnection] = useState<ConnectionStatus>(
     client?.connectionStatus() ?? "connected",
   );
@@ -75,6 +95,7 @@ export function App({
     [visibleSnapshot.loadedThreadId, visibleSnapshot.threads],
   );
   const running = visibleSnapshot.activeTurn?.status === "inProgress";
+  const attachmentBlocked = draftAttachments.some((attachment) => attachment.status !== "ready");
 
   useEffect(() => {
     if (!client) return undefined;
@@ -86,8 +107,8 @@ export function App({
 
   useEffect(() => {
     const selected = snapshot.threads.find((entry) => entry.id === snapshot.loadedThreadId);
-    if (selected?.cwd) setCwd(selected.cwd);
-  }, [snapshot.loadedThreadId, snapshot.threads]);
+    if (selected?.cwd && selected.cwd !== cwd) void changeCwd(selected.cwd);
+  }, [cwd, snapshot.loadedThreadId, snapshot.threads]);
 
   useEffect(() => {
     if (snapshot.models.some((entry) => entry.id === model)) return;
@@ -97,7 +118,136 @@ export function App({
     if (next) setModel(next.id);
   }, [model, settings.model, snapshot.models]);
 
+  useEffect(() => () => {
+    attachmentGenerationRef.current += 1;
+    for (const handle of uploadHandlesRef.current.values()) handle.abort();
+    uploadHandlesRef.current.clear();
+    const session = attachmentSessionRef.current;
+    const pending = attachmentSessionPromiseRef.current;
+    attachmentSessionRef.current = undefined;
+    attachmentSessionPromiseRef.current = undefined;
+    void (session ? Promise.resolve(session) : pending)
+      ?.then((value) => attachmentClient.cancel(value.id))
+      .catch(() => undefined);
+  }, [attachmentClient]);
+
+  function updateDraftAttachments(
+    update: DraftAttachment[] | ((current: DraftAttachment[]) => DraftAttachment[]),
+  ): void {
+    const next = typeof update === "function" ? update(draftAttachmentsRef.current) : update;
+    draftAttachmentsRef.current = next;
+    setDraftAttachments(next);
+  }
+
+  async function ensureAttachmentSession() {
+    if (attachmentSessionRef.current) return attachmentSessionRef.current;
+    if (attachmentSessionPromiseRef.current) return attachmentSessionPromiseRef.current;
+    const generation = attachmentGenerationRef.current;
+    const promise = attachmentClient.createSession(cwd).then((session) => {
+      if (generation === attachmentGenerationRef.current) attachmentSessionRef.current = session;
+      return session;
+    });
+    attachmentSessionPromiseRef.current = promise;
+    void promise.finally(() => {
+      if (attachmentSessionPromiseRef.current === promise) {
+        attachmentSessionPromiseRef.current = undefined;
+      }
+    }).catch(() => undefined);
+    return promise;
+  }
+
+  async function discardAttachmentDraft(): Promise<void> {
+    attachmentGenerationRef.current += 1;
+    for (const handle of uploadHandlesRef.current.values()) handle.abort();
+    uploadHandlesRef.current.clear();
+    const session = attachmentSessionRef.current;
+    const pending = attachmentSessionPromiseRef.current;
+    attachmentSessionRef.current = undefined;
+    attachmentSessionPromiseRef.current = undefined;
+    updateDraftAttachments([]);
+    try {
+      const created = session ?? await pending;
+      if (created) await attachmentClient.cancel(created.id);
+    } catch {}
+  }
+
+  function consumeAttachmentDraft(): void {
+    attachmentGenerationRef.current += 1;
+    uploadHandlesRef.current.clear();
+    attachmentSessionRef.current = undefined;
+    attachmentSessionPromiseRef.current = undefined;
+    updateDraftAttachments([]);
+  }
+
+  async function addAttachmentFiles(files: File[]): Promise<void> {
+    if (files.length === 0) return;
+    if (!cwd.trim()) {
+      setActionError("Choose a working directory before attaching files.");
+      return;
+    }
+    const rows = files.map((file): DraftAttachment => ({
+      localId: crypto.randomUUID(),
+      file,
+      progress: 0,
+      status: "uploading",
+    }));
+    updateDraftAttachments((current) => [...current, ...rows]);
+    try {
+      const session = await ensureAttachmentSession();
+      for (const row of rows) {
+        const handle = attachmentClient.upload(session.id, row.file, (progress) => {
+          updateDraftAttachments((current) => current.map((attachment) =>
+            attachment.localId === row.localId
+              ? { ...attachment, progress: Math.max(attachment.progress, progress) }
+              : attachment,
+          ));
+        });
+        uploadHandlesRef.current.set(row.localId, handle);
+        void handle.promise.then((remote) => {
+          uploadHandlesRef.current.delete(row.localId);
+          updateDraftAttachments((current) => current.map((attachment) =>
+            attachment.localId === row.localId
+              ? { ...attachment, progress: 1, status: "ready", remote }
+              : attachment,
+          ));
+        }).catch((error: unknown) => {
+          uploadHandlesRef.current.delete(row.localId);
+          updateDraftAttachments((current) => current.map((attachment) =>
+            attachment.localId === row.localId
+              ? { ...attachment, status: "failed", error: errorMessage(error) }
+              : attachment,
+          ));
+        });
+      }
+    } catch (error) {
+      updateDraftAttachments((current) => current.map((attachment) =>
+        rows.some((row) => row.localId === attachment.localId)
+          ? { ...attachment, status: "failed", error: errorMessage(error) }
+          : attachment,
+      ));
+    }
+  }
+
+  async function removeAttachment(attachment: DraftAttachment): Promise<void> {
+    uploadHandlesRef.current.get(attachment.localId)?.abort();
+    uploadHandlesRef.current.delete(attachment.localId);
+    const sessionId = attachmentSessionRef.current?.id;
+    try {
+      if (sessionId && attachment.remote) {
+        await attachmentClient.remove(sessionId, attachment.remote.id);
+      }
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+    const remaining = draftAttachmentsRef.current.filter(
+      (entry) => entry.localId !== attachment.localId,
+    );
+    updateDraftAttachments(remaining);
+    if (remaining.length === 0) await discardAttachmentDraft();
+  }
+
   async function selectThread(threadId: string) {
+    await discardAttachmentDraft();
     setNewTaskMode(false);
     onSelectThread?.(threadId);
     if (client) {
@@ -111,10 +261,13 @@ export function App({
   }
 
   async function send() {
-    const input = { text: draft, cwd, model };
-    onSend?.(input);
+    const attachmentSessionId = draftAttachments.some((attachment) => attachment.status === "ready")
+      ? attachmentSessionRef.current?.id
+      : undefined;
+    const input = { text: draft, cwd, model, ...(attachmentSessionId ? { attachmentSessionId } : {}) };
     try {
       setActionError(undefined);
+      onSend?.(input);
       if (client) {
         let threadId = newTaskMode ? undefined : snapshot.loadedThreadId;
         if (!threadId) {
@@ -122,7 +275,11 @@ export function App({
           threadId = result.id;
           setNewTaskMode(false);
         }
-        await client.request("turn.start", { threadId, text: draft });
+        await client.request("turn.start", {
+          threadId,
+          text: draft,
+          ...(attachmentSessionId ? { attachmentSessionId } : {}),
+        });
       }
       const nextSettings = {
         recentDirectories: [cwd, ...settings.recentDirectories.filter((entry) => entry !== cwd)].slice(0, 20),
@@ -131,6 +288,7 @@ export function App({
       setSettings(nextSettings);
       onPersistSettings?.(nextSettings);
       setDraft("");
+      if (attachmentSessionId) consumeAttachmentDraft();
     } catch (error) {
       setActionError(errorMessage(error));
     }
@@ -155,11 +313,19 @@ export function App({
     }
   }
 
-  function newTask() {
+  async function newTask() {
+    await discardAttachmentDraft();
     setNewTaskMode(true);
     setDraft("");
     setMobileView("chat");
     onNewTask?.();
+  }
+
+  async function changeCwd(nextCwd: string): Promise<void> {
+    if (nextCwd !== cwd && draftAttachmentsRef.current.length > 0) {
+      await discardAttachmentDraft();
+    }
+    setCwd(nextCwd);
   }
 
   async function browseDirectory(path?: string) {
@@ -184,7 +350,7 @@ export function App({
     <div className="app-shell" data-mobile-view={mobileView}>
       <ThreadSidebar
         connection={connection}
-        onNewTask={newTask}
+        onNewTask={() => void newTask()}
         onQueryChange={setQuery}
         onSelect={(threadId) => {
           void selectThread(threadId);
@@ -219,10 +385,14 @@ export function App({
             model={model}
             models={visibleSnapshot.models}
             recentDirectories={settings.recentDirectories}
-            onCwdChange={setCwd}
+            attachments={draftAttachments}
+            attachmentBlocked={attachmentBlocked}
+            onCwdChange={(value) => void changeCwd(value)}
             onBrowseDirectory={client ? () => void browseDirectory() : undefined}
+            onFilesSelected={(files) => void addAttachmentFiles(files)}
             onInterrupt={interrupt}
             onModelChange={setModel}
+            onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
             onSend={() => void send()}
             onValueChange={setDraft}
             running={running}
@@ -244,8 +414,7 @@ export function App({
           onClose={() => setDirectoryPickerOpen(false)}
           onNavigate={(path) => void browseDirectory(path)}
           onSelect={(path) => {
-            setCwd(path);
-            setDirectoryPickerOpen(false);
+            void changeCwd(path).then(() => setDirectoryPickerOpen(false));
           }}
         />
       ) : null}

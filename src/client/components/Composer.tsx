@@ -2,6 +2,8 @@ import { ArrowUp, FolderGit2, FolderOpen, Paperclip, Square } from "lucide-react
 import { useRef } from "react";
 
 import type { ModelSummary } from "../../shared/protocol";
+import type { DraftAttachment } from "../attachments";
+import { AttachmentList } from "./AttachmentList";
 
 interface ComposerProps {
   value: string;
@@ -11,12 +13,16 @@ interface ComposerProps {
   recentDirectories?: string[];
   running: boolean;
   disabled?: boolean;
+  attachments?: DraftAttachment[];
+  attachmentBlocked?: boolean;
   onValueChange: (value: string) => void;
   onCwdChange: (cwd: string) => void;
   onBrowseDirectory?: () => void;
   onModelChange: (model: string) => void;
   onSend: () => void;
   onInterrupt: () => void;
+  onFilesSelected?: (files: File[]) => void;
+  onRemoveAttachment?: (attachment: DraftAttachment) => void;
 }
 
 export function Composer({
@@ -27,18 +33,29 @@ export function Composer({
   recentDirectories = [],
   running,
   disabled,
+  attachments = [],
+  attachmentBlocked = false,
   onValueChange,
   onCwdChange,
   onBrowseDirectory,
   onModelChange,
   onSend,
   onInterrupt,
+  onFilesSelected,
+  onRemoveAttachment,
 }: ComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const canSend = !disabled && value.trim().length > 0 && cwd.trim().length > 0 && model;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const hasReadyAttachment = attachments.some((attachment) => attachment.status === "ready");
+  const canSend = !disabled && !attachmentBlocked &&
+    (value.trim().length > 0 || hasReadyAttachment) && cwd.trim().length > 0 && Boolean(model);
   return (
     <div className="composer-wrap">
       <div className="composer">
+        <AttachmentList
+          attachments={attachments}
+          onRemove={(attachment) => onRemoveAttachment?.(attachment)}
+        />
         <textarea
           aria-label="Message Codex"
           disabled={disabled}
@@ -55,7 +72,26 @@ export function Composer({
           value={value}
         />
         <div className="composer__toolbar">
-          <button aria-label="Attach context" className="icon-button" type="button">
+          <input
+            aria-label="Choose attachment files"
+            className="sr-only"
+            disabled={disabled || running || !cwd.trim()}
+            multiple
+            onChange={(event) => {
+              onFilesSelected?.(Array.from(event.target.files ?? []));
+              event.target.value = "";
+            }}
+            ref={fileInput}
+            type="file"
+          />
+          <button
+            aria-label="Attach context"
+            className="icon-button"
+            disabled={disabled || running || !cwd.trim()}
+            onClick={() => fileInput.current?.click()}
+            title={cwd.trim() ? "Attach files from this device" : "Choose a working directory first"}
+            type="button"
+          >
             <Paperclip size={15} />
           </button>
           <div className="composer-control composer-control--cwd">

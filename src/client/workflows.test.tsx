@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import type { BrowserSnapshot } from "../shared/protocol";
 import { App } from "./App";
 import { CodexWebClient, type SocketLike } from "./websocket";
+import type { AttachmentTransport } from "./attachments";
 
 class WorkflowSocket implements SocketLike {
   readyState = 1;
@@ -109,6 +110,92 @@ describe("live client workflows", () => {
       method: "turn.start",
       params: { threadId: "t1", text: "Run the tests" },
     });
+  });
+
+  test("uploads an attachment-only draft and sends only its opaque session id", async () => {
+    const socket = new WorkflowSocket();
+    const client = new CodexWebClient(emptySnapshot, () => socket);
+    const calls: unknown[] = [];
+    const attachments: AttachmentTransport = {
+      createSession: async (cwd) => {
+        calls.push(["create", cwd]);
+        return {
+          id: "session-1",
+          expiresAt: 1_700_000_000,
+          limits: { files: 10, fileBytes: 20_971_520, totalBytes: 52_428_800 },
+        };
+      },
+      upload: (_sessionId, file, onProgress) => {
+        onProgress(0.5);
+        return {
+          abort: () => calls.push(["abort", file.name]),
+          promise: Promise.resolve({ id: "file-1", name: file.name, size: file.size, kind: "text" }),
+        };
+      },
+      remove: async (...args) => { calls.push(["remove", ...args]); },
+      cancel: async (...args) => { calls.push(["cancel", ...args]); },
+    };
+    client.connect();
+    socket.onopen?.();
+    render(
+      <App
+        attachmentClient={attachments}
+        client={client}
+        initialSettings={{ recentDirectories: ["/work/app"] }}
+        initialSnapshot={emptySnapshot}
+      />,
+    );
+    const user = userEvent.setup();
+    const file = new File(["hello"], "notes.ts", { type: "text/plain" });
+
+    await user.upload(screen.getByLabelText("Choose attachment files"), file);
+    expect(calls[0]).toEqual(["create", "/work/app"]);
+    expect(await screen.findByText("notes.ts")).not.toBeNull();
+    expect(await screen.findByText(/Ready/)).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    const start = JSON.parse(socket.sent[0] ?? "null");
+    socket.receive({ kind: "response", id: start.id, result: { id: "t1" } });
+    await Bun.sleep(0);
+
+    expect(JSON.parse(socket.sent[1] ?? "null")).toMatchObject({
+      method: "turn.start",
+      params: { threadId: "t1", text: "", attachmentSessionId: "session-1" },
+    });
+  });
+
+  test("cancels draft attachments before changing the server project", async () => {
+    const calls: unknown[] = [];
+    const attachments: AttachmentTransport = {
+      createSession: async () => ({
+        id: "session-1",
+        expiresAt: 1_700_000_000,
+        limits: { files: 10, fileBytes: 20, totalBytes: 50 },
+      }),
+      upload: (_sessionId, file) => ({
+        abort: () => calls.push(["abort"]),
+        promise: Promise.resolve({ id: "file-1", name: file.name, size: file.size, kind: "text" }),
+      }),
+      remove: async () => undefined,
+      cancel: async (sessionId) => { calls.push(["cancel", sessionId]); },
+    };
+    render(
+      <App
+        attachmentClient={attachments}
+        initialSettings={{ recentDirectories: ["/work/one"] }}
+        initialSnapshot={emptySnapshot}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.upload(
+      screen.getByLabelText("Choose attachment files"),
+      new File(["hello"], "notes.ts", { type: "text/plain" }),
+    );
+    await screen.findByText(/Ready/);
+    const cwd = screen.getByRole("combobox", { name: "Working directory" });
+    await user.clear(cwd);
+
+    expect(calls).toContainEqual(["cancel", "session-1"]);
+    expect(screen.queryByText("notes.ts")).toBeNull();
   });
 
   test("applies live snapshots and resolves an approval", async () => {
