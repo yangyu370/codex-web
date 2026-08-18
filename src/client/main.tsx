@@ -3,12 +3,13 @@ import { createRoot } from "react-dom/client";
 
 import type { BrowserSnapshot } from "../shared/protocol";
 import { App, type ClientSettings } from "./App";
+import { assertCompatibleSnapshot } from "./bootstrap";
 import { CodexWebClient } from "./websocket";
 
 async function bootstrap(): Promise<BrowserSnapshot> {
   const response = await fetch("/api/bootstrap", { credentials: "same-origin" });
   if (!response.ok) throw new Error(`Bootstrap failed with ${response.status}`);
-  return response.json() as Promise<BrowserSnapshot>;
+  return assertCompatibleSnapshot(await response.json());
 }
 
 async function loadSettings(): Promise<ClientSettings> {

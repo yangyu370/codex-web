@@ -5,6 +5,7 @@ import { CodexWebClient, type SocketLike } from "./websocket";
 
 const snapshot: BrowserSnapshot = {
   kind: "snapshot",
+  protocolVersion: 2,
   sequence: 4,
   service: { status: "ready", platform: "macos" },
   models: [],
@@ -41,6 +42,23 @@ class FakeSocket implements SocketLike {
 }
 
 describe("CodexWebClient", () => {
+  test("rejects a request whose correlated response never arrives", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexWebClient(snapshot, () => socket, { requestTimeoutMs: 5 });
+    client.connect();
+    socket.open();
+
+    const outcome = await Promise.race([
+      client.request("directory.list", {}).then(
+        () => "resolved",
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      ),
+      Bun.sleep(25).then(() => "still-pending"),
+    ]);
+
+    expect(outcome).toBe("interrupted: request timed out");
+  });
+
   test("correlates requests and applies authoritative snapshots", async () => {
     const socket = new FakeSocket();
     const client = new CodexWebClient(snapshot, () => socket);

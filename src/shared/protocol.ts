@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const MAX_BROWSER_MESSAGE_BYTES = 65_536;
 export const MAX_SERVER_MESSAGE_BYTES = 8_388_608;
+export const WEB_PROTOCOL_VERSION = 2;
 
 export const browserMethods = [
   "directory.list",
@@ -140,6 +141,7 @@ export interface PendingApproval {
 
 export interface BrowserSnapshot {
   kind: "snapshot";
+  protocolVersion: number;
   sequence: number;
   service: {
     status: "starting" | "ready" | "restarting" | "unavailable";

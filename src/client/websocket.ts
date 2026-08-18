@@ -19,6 +19,7 @@ export interface SocketLike {
 
 export interface CodexWebClientOptions {
   reconnectDelays?: number[];
+  requestTimeoutMs?: number;
   sleep?: (milliseconds: number) => Promise<void>;
 }
 
@@ -27,6 +28,7 @@ export type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "cl
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error): void;
+  timeout: ReturnType<typeof setTimeout>;
 }
 
 export class CodexWebClient {
@@ -51,6 +53,7 @@ export class CodexWebClient {
     this.#factory = factory;
     this.#options = {
       reconnectDelays: options.reconnectDelays ?? [250, 1_000, 4_000, 10_000],
+      requestTimeoutMs: options.requestTimeoutMs ?? 15_000,
       sleep: options.sleep ?? sleep,
     };
   }
@@ -111,7 +114,11 @@ export class CodexWebClient {
     const id = `web-${this.#nextRequestId}`;
     this.#nextRequestId += 1;
     const response = new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        if (!this.#pending.delete(id)) return;
+        reject(new Error("interrupted: request timed out"));
+      }, this.#options.requestTimeoutMs);
+      this.#pending.set(id, { resolve, reject, timeout });
     });
     socket.send(JSON.stringify({ kind: "request", id, method, params }));
     return response;
@@ -141,6 +148,7 @@ export class CodexWebClient {
     const pending = this.#pending.get(message.id);
     if (!pending) return;
     this.#pending.delete(message.id);
+    clearTimeout(pending.timeout);
     if (message.error) {
       pending.reject(new Error(`${message.error.code}: ${message.error.message}`));
     } else {
@@ -223,7 +231,10 @@ export class CodexWebClient {
   }
 
   #rejectPending(error: Error): void {
-    for (const pending of this.#pending.values()) pending.reject(error);
+    for (const pending of this.#pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
     this.#pending.clear();
   }
 

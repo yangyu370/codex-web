@@ -6,6 +6,7 @@ import type {
   ThreadSummary,
   VisibleItem,
 } from "../../shared/protocol";
+import { WEB_PROTOCOL_VERSION } from "../../shared/protocol";
 import { decodeThread, optionalNumber, optionalString, record } from "../app-server/decoders";
 import type { JsonRpcNotification, JsonRpcServerRequest } from "../app-server/json-rpc";
 
@@ -66,6 +67,7 @@ export class WebState {
   snapshot(): BrowserSnapshot {
     const snapshot: BrowserSnapshot = structuredClone({
       kind: "snapshot",
+      protocolVersion: WEB_PROTOCOL_VERSION,
       sequence: this.#sequence,
       service: this.#service,
       models: this.#models,

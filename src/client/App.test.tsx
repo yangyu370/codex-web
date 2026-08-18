@@ -7,6 +7,7 @@ import { App } from "./App";
 
 const emptySnapshot: BrowserSnapshot = {
   kind: "snapshot",
+  protocolVersion: 2,
   sequence: 0,
   service: {
     status: "ready",

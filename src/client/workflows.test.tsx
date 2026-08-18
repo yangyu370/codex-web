@@ -20,6 +20,7 @@ class WorkflowSocket implements SocketLike {
 
 const emptySnapshot: BrowserSnapshot = {
   kind: "snapshot",
+  protocolVersion: 2,
   sequence: 0,
   service: { status: "ready", platform: "macos" },
   models: [{ id: "gpt-5.6", displayName: "GPT-5.6", isDefault: true }],
