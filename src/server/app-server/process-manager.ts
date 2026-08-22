@@ -1,4 +1,5 @@
 import type { AppServerProcess, HostPlatform } from "../platform";
+import { createJsonlTransport } from "./jsonl-transport";
 import { JsonRpcPeer } from "./json-rpc";
 
 const STDERR_CAP_BYTES = 262_144;
@@ -117,7 +118,7 @@ export class AppServerProcessManager {
       void this.#captureStderr(child.stderr);
       void child.exited.then((exitCode) => this.#handleExit(child, exitCode));
 
-      const peer = new JsonRpcPeer(child.stdout, child.stdin);
+      const peer = new JsonRpcPeer(createJsonlTransport(child.stdout, child.stdin));
       this.#peer = peer;
       await peer.request("initialize", {
         clientInfo: { name: "codex-web", version: "0.1.0" },

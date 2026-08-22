@@ -1,58 +1,78 @@
 import { describe, expect, test } from "bun:test";
 
-import { JsonRpcPeer, JsonRpcResponseError, type JsonRpcServerRequest } from "./json-rpc";
+import {
+  JsonRpcPeer,
+  JsonRpcResponseError,
+  type JsonRpcServerRequest,
+  type JsonRpcTransport,
+} from "./json-rpc";
+
+class MemoryJsonRpcTransport implements JsonRpcTransport {
+  readonly outbound: string[] = [];
+  readonly #messageListeners = new Set<(source: string) => void>();
+  readonly #closeListeners = new Set<(reason?: Error) => void>();
+
+  send(source: string): void {
+    this.outbound.push(source);
+  }
+
+  close(): void {
+    this.emitClose();
+  }
+
+  onMessage(listener: (source: string) => void): () => void {
+    this.#messageListeners.add(listener);
+    return () => this.#messageListeners.delete(listener);
+  }
+
+  onClose(listener: (reason?: Error) => void): () => void {
+    this.#closeListeners.add(listener);
+    return () => this.#closeListeners.delete(listener);
+  }
+
+  receive(source: string): void {
+    for (const listener of this.#messageListeners) listener(source);
+  }
+
+  emitClose(reason?: Error): void {
+    for (const listener of this.#closeListeners) listener(reason);
+  }
+}
 
 function peerHarness() {
-  const inbound = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = inbound.writable.getWriter();
-  const outbound: string[] = [];
-  const peer = new JsonRpcPeer(inbound.readable, {
-    write(data) {
-      outbound.push(typeof data === "string" ? data : new TextDecoder().decode(data));
-      return data.length;
-    },
-    end() {},
-  });
+  const transport = new MemoryJsonRpcTransport();
+  const peer = new JsonRpcPeer(transport);
   return {
     peer,
-    outbound,
+    outbound: transport.outbound,
     async send(value: unknown) {
-      await writer.write(new TextEncoder().encode(`${JSON.stringify(value)}\n`));
+      transport.receive(JSON.stringify(value));
     },
     async sendRaw(value: string) {
-      await writer.write(new TextEncoder().encode(value));
+      transport.receive(value);
     },
     async close() {
-      await writer.close();
+      transport.emitClose(new Error("test transport closed"));
     },
   };
 }
 
 describe("JsonRpcPeer", () => {
   test("times out bounded adapter requests", async () => {
-    const inbound = new TransformStream<Uint8Array, Uint8Array>();
-    const peer = new JsonRpcPeer(
-      inbound.readable,
-      { write: () => 0, end: () => undefined },
-      { requestTimeoutMs: 1 },
-    );
+    const transport = new MemoryJsonRpcTransport();
+    const peer = new JsonRpcPeer(transport, { requestTimeoutMs: 1 });
 
     await expect(peer.request("model/list", {})).rejects.toThrow("timed out");
-    await inbound.writable.getWriter().close();
+    transport.emitClose();
   });
 
   test("rejects overload before writing beyond the in-flight limit", async () => {
-    const inbound = new TransformStream<Uint8Array, Uint8Array>();
-    const outbound: string[] = [];
-    const peer = new JsonRpcPeer(
-      inbound.readable,
-      { write: (value) => { outbound.push(String(value)); return value.length; }, end: () => undefined },
-      { maxPendingRequests: 1 },
-    );
+    const transport = new MemoryJsonRpcTransport();
+    const peer = new JsonRpcPeer(transport, { maxPendingRequests: 1 });
 
     const first = peer.request("thread/list", {});
     await expect(peer.request("model/list", {})).rejects.toMatchObject({ code: -32001 });
-    expect(outbound).toHaveLength(1);
+    expect(transport.outbound).toHaveLength(1);
     peer.close();
     await expect(first).rejects.toThrow("transport closed");
   });
@@ -129,24 +149,24 @@ describe("JsonRpcPeer", () => {
     await harness.close();
   });
 
-  test("records malformed lines and continues with the next message", async () => {
+  test("records malformed messages and continues with the next message", async () => {
     const harness = peerHarness();
     const errors: string[] = [];
     harness.peer.onProtocolError((error) => errors.push(error.message));
     const result = harness.peer.request("model/list", {});
 
-    await harness.sendRaw("not-json\n");
+    await harness.sendRaw("not-json");
     await harness.send({ jsonrpc: "2.0", id: 1, result: { data: ["ok"] } });
 
     expect(await result).toEqual({ data: ["ok"] });
-    expect(errors).toEqual(["malformed JSON-RPC line"]);
+    expect(errors).toEqual(["malformed JSON-RPC message"]);
     await harness.close();
   });
 
-  test("rejects outstanding requests when stdout closes", async () => {
+  test("rejects outstanding requests when the transport closes", async () => {
     const harness = peerHarness();
     const result = harness.peer.request("thread/list", {});
     await harness.close();
-    await expect(result).rejects.toThrow("app-server stdout closed");
+    await expect(result).rejects.toThrow("test transport closed");
   });
 });
