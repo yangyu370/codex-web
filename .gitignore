@@ -2,6 +2,6 @@ node_modules/
 dist/
 playwright-report/
 test-results/
+.worktrees/
 *.log
 .DS_Store
-
