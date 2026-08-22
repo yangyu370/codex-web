@@ -13,11 +13,14 @@ function actions(overrides: Partial<BrowserActions> = {}): BrowserActions {
       truncated: false,
     }),
     models: async () => [],
+    permissionProfiles: async () => [],
     listThreads: async () => ({ data: [], nextCursor: null }),
     startThread: async () => ({ id: "t1" }),
     resumeThread: async () => ({ id: "t1" }),
     readThread: async () => ({ id: "t1" }),
     startTurn: async () => ({ id: "turn1", threadId: "t1", status: "inProgress" }),
+    updateThreadSettings: async () => ({}),
+    startReview: async () => ({ threadId: "t1", turnId: "review1", status: "inProgress" }),
     interruptTurn: async () => ({}),
     resolveApproval: () => undefined,
     ...overrides,
@@ -147,6 +150,9 @@ describe("BrowserGateway", () => {
       threadId: "t1",
       text: "Review these",
       attachmentSessionId: "11111111-1111-4111-8111-111111111111",
+      model: "gpt-5.6",
+      effort: "high",
+      permissionProfile: ":workspace",
       paths: ["/must/not/pass"],
     }), (message) => sent.push(message));
 
@@ -154,8 +160,77 @@ describe("BrowserGateway", () => {
       "t1",
       "Review these",
       "11111111-1111-4111-8111-111111111111",
+      {
+        model: "gpt-5.6",
+        effort: "high",
+        permissionProfile: ":workspace",
+      },
     ]]);
     expect(sent[0]).toMatchObject({ kind: "response", id: "r1", result: { id: "turn1" } });
+  });
+
+  test("dispatches bounded task settings and inline review actions", async () => {
+    const state = new WebState("macos");
+    const calls: unknown[] = [];
+    const gateway = new BrowserGateway(state, actions({
+      updateThreadSettings: async (...args) => { calls.push(["settings", ...args]); return {}; },
+      startReview: async (...args) => { calls.push(["review", ...args]); return {}; },
+    }));
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(request("thread.settings.update", {
+      threadId: "t1",
+      effort: "high",
+      permissionProfile: ":workspace",
+    }), (message) => sent.push(message));
+    await gateway.handleMessage(request("review.start", { threadId: "t1" }), (message) => {
+      sent.push(message);
+    });
+
+    expect(calls).toEqual([
+      ["settings", "t1", { effort: "high", permissionProfile: ":workspace" }],
+      ["review", "t1"],
+    ]);
+    expect(sent).toHaveLength(2);
+  });
+
+  test("rejects empty or oversized task setting updates", async () => {
+    const state = new WebState("macos");
+    const calls: unknown[] = [];
+    const gateway = new BrowserGateway(state, actions({
+      updateThreadSettings: async (...args) => { calls.push(args); return {}; },
+    }));
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(request("thread.settings.update", {
+      threadId: "t1",
+    }), (message) => sent.push(message));
+    await gateway.handleMessage(request("thread.settings.update", {
+      threadId: "t1",
+      effort: "x".repeat(513),
+    }), (message) => sent.push(message));
+
+    expect(calls).toEqual([]);
+    expect(sent).toHaveLength(2);
+    expect(sent).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "response", error: expect.objectContaining({ code: "invalidRequest" }) }),
+    ]));
+  });
+
+  test("reports browser connection count changes once per connection", () => {
+    const state = new WebState("macos");
+    const counts: number[] = [];
+    const gateway = new BrowserGateway(state, actions(), {
+      onConnectionCountChanged: (count) => counts.push(count),
+    });
+    const disconnectOne = gateway.connect(() => undefined);
+    const disconnectTwo = gateway.connect(() => undefined);
+
+    disconnectOne();
+    disconnectOne();
+    disconnectTwo();
+
+    expect(counts).toEqual([1, 2, 1, 0]);
   });
 
   test("replays retained events and falls back to a snapshot after expiry", () => {

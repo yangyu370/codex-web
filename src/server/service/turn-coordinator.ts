@@ -27,6 +27,7 @@ export interface TurnStarter {
   startTurn(
     threadId: string,
     input: NativeTurnInput[],
+    settings?: { model?: string; effort?: string; permissionProfile?: string },
   ): Promise<{ id: string; threadId: string; status: "inProgress" }>;
 }
 
@@ -45,6 +46,7 @@ export class TurnCoordinator {
     threadId: string,
     text: string,
     attachmentSessionId?: string,
+    settings?: { model?: string; effort?: string; permissionProfile?: string },
   ): Promise<{ id: string; threadId: string; status: "inProgress" }> {
     const prepared = attachmentSessionId
       ? await this.attachments.prepareForTurn(
@@ -56,6 +58,7 @@ export class TurnCoordinator {
       const result = await this.getAdapter().startTurn(
         threadId,
         buildTurnInputs(text, prepared),
+        settings,
       );
       if (prepared) {
         await this.attachments.bindTurn(prepared.sessionId, threadId, result.id);

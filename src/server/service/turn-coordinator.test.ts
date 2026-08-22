@@ -24,8 +24,9 @@ describe("TurnCoordinator", () => {
       releaseTurn: async (...args) => { calls.push(["release", ...args]); },
       completeTurn: async (...args) => { calls.push(["complete", ...args]); },
     }, () => ({
-      startTurn: async (_threadId, value) => {
+      startTurn: async (_threadId, value, settings) => {
         inputs.push(value);
+        calls.push(["settings", settings]);
         return { id: "turn-1", threadId: "thread-1", status: "inProgress" as const };
       },
     }));
@@ -34,6 +35,7 @@ describe("TurnCoordinator", () => {
       "thread-1",
       "",
       "11111111-1111-4111-8111-111111111111",
+      { model: "gpt-5.6", effort: "high", permissionProfile: ":workspace" },
     );
 
     expect(inputs).toHaveLength(1);
@@ -43,6 +45,7 @@ describe("TurnCoordinator", () => {
     expect(inputs[0]?.[1]).toEqual({ type: "localImage", path: "/project/a-photo.png" });
     expect(calls).toEqual([
       ["prepare", "11111111-1111-4111-8111-111111111111", "/project"],
+      ["settings", { model: "gpt-5.6", effort: "high", permissionProfile: ":workspace" }],
       ["bind", "11111111-1111-4111-8111-111111111111", "thread-1", "turn-1"],
     ]);
     coordinator.close();

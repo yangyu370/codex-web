@@ -14,6 +14,7 @@ import { SettingsStore } from "./service/settings";
 import { LocalEventLog, secretEnvironmentValues } from "./service/local-log";
 import { AttachmentStore } from "./service/attachment-store";
 import { TurnCoordinator } from "./service/turn-coordinator";
+import { ThreadCatalogRefresher } from "./service/thread-catalog";
 
 const hostname = "127.0.0.1";
 const port = parsePort(process.env.CODEX_WEB_PORT);
@@ -39,21 +40,49 @@ function readyAdapter(): CodexAdapter {
 
 const attachments = new AttachmentStore(platform, platform.dataDirectory());
 const coordinator = new TurnCoordinator(state, attachments, readyAdapter);
+const catalog = new ThreadCatalogRefresher(
+  () => readyAdapter().listThreads(),
+  {
+    onError: (error) => state.addDiagnostic(`thread catalog refresh: ${error.message}`),
+  },
+);
 
 const actions: BrowserActions = {
   listDirectory: (directory) => directories.list(directory),
   models: () => readyAdapter().models(),
-  listThreads: (cursor) => readyAdapter().listThreads(cursor),
+  permissionProfiles: () => readyAdapter().permissionProfiles(),
+  listThreads: async (cursor) => {
+    if (cursor) return readyAdapter().listThreads(cursor);
+    return (await catalog.refreshNow()) ?? {
+      data: state.snapshot().threads,
+      nextCursor: null,
+    };
+  },
   startThread: (params) => readyAdapter().startThread(params),
   resumeThread: (threadId) => readyAdapter().resumeThread(threadId),
   readThread: (threadId) => readyAdapter().readThread(threadId),
-  startTurn: (threadId, text, attachmentSessionId) =>
-    coordinator.start(threadId, text, attachmentSessionId),
+  startTurn: (threadId, text, attachmentSessionId, taskSettings) =>
+    coordinator.start(threadId, text, attachmentSessionId, taskSettings),
   interruptTurn: (threadId, turnId) => readyAdapter().interruptTurn(threadId, turnId),
+  updateThreadSettings: (threadId, taskSettings) =>
+    readyAdapter().updateThreadSettings(threadId, taskSettings),
+  startReview: (threadId) => readyAdapter().startReview(threadId),
   resolveApproval: (id, decision, deviceId) =>
     readyAdapter().resolveApproval(id, decision, deviceId),
 };
-const gateway = new BrowserGateway(state, actions);
+let browserConnections = 0;
+const gateway = new BrowserGateway(state, actions, {
+  onConnectionCountChanged(count) {
+    while (browserConnections < count) {
+      catalog.browserConnected();
+      browserConnections += 1;
+    }
+    while (browserConnections > count) {
+      catalog.browserDisconnected();
+      browserConnections -= 1;
+    }
+  },
+});
 const settings = new SettingsStore(platform.dataDirectory());
 const lifecycle = createWebSocketLifecycle(gateway);
 const auth = parseAuthConfig(process.env);
@@ -70,25 +99,27 @@ const fetch = createBunFetchHandler({
   attachments,
 });
 
+let readyGeneration = 0;
 manager.onState((snapshot) => {
+  readyGeneration += 1;
+  const generation = readyGeneration;
   if (snapshot.status === "ready") {
-    adapter = new CodexAdapter(manager.peer(), state, platform);
-    state.setService({
-      status: "ready",
-      ...(snapshot.codexVersion ? { codexVersion: snapshot.codexVersion } : {}),
-    });
-    void Promise.all([adapter.models(), adapter.listThreads()]).catch((error) => {
-      const diagnosticId = crypto.randomUUID();
-      state.addDiagnostic(`${diagnosticId}: ${error instanceof Error ? error.message : String(error)}`);
+    const nextAdapter = new CodexAdapter(manager.peer(), state, platform);
+    const loadedThreadId = state.snapshot().loadedThreadId;
+    void Promise.all([
+      loadCapability("models", () => nextAdapter.models()),
+      loadCapability("permission profiles", () => nextAdapter.permissionProfiles()),
+      loadCapability("thread catalog", () => nextAdapter.listThreads()),
+      ...(loadedThreadId
+        ? [loadCapability("loaded thread", () => nextAdapter.resumeThread(loadedThreadId))]
+        : []),
+    ]).then(() => {
+      if (generation !== readyGeneration || manager.snapshot().status !== "ready") return;
+      adapter = nextAdapter;
       state.setService({
         status: "ready",
         ...(snapshot.codexVersion ? { codexVersion: snapshot.codexVersion } : {}),
-        error: {
-          code: "compatibilityError",
-          message: `Codex ${snapshot.codexVersion ?? "app-server"} could not provide models or tasks.`,
-          retryable: false,
-          diagnosticId,
-        },
+        ...(snapshot.liveHandoff ? { liveHandoff: snapshot.liveHandoff } : {}),
       });
     });
     return;
@@ -102,6 +133,7 @@ manager.onState((snapshot) => {
   state.setService({
     status: snapshot.status,
     ...(snapshot.codexVersion ? { codexVersion: snapshot.codexVersion } : {}),
+    ...(snapshot.liveHandoff ? { liveHandoff: snapshot.liveHandoff } : {}),
     ...(snapshot.error
       ? {
           error: {
@@ -151,10 +183,22 @@ async function shutdown(): Promise<void> {
   }
   state.interruptActiveWork();
   await manager.stop();
+  catalog.close();
   coordinator.close();
   await attachments.close();
   await localLog.flush();
   process.exit(0);
+}
+
+async function loadCapability(label: string, load: () => Promise<unknown>): Promise<void> {
+  try {
+    await load();
+  } catch (error) {
+    const diagnosticId = crypto.randomUUID();
+    state.addDiagnostic(
+      `${diagnosticId}: ${label}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
