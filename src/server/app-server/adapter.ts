@@ -253,11 +253,13 @@ export class CodexAdapter {
       throw new Error("compatibilityError: review/start response");
     }
     const review = { threadId: reviewThreadId, turnId, status: "inProgress" as const };
-    this.#state.setReview(review);
-    this.#state.applyNotification({
-      method: "turn/started",
-      params: { threadId: reviewThreadId, turn: { ...turn, id: turnId } },
-    });
+    if (this.#state.snapshot().loadedThreadId === threadId) {
+      this.#state.setReview(review);
+      this.#state.applyNotification({
+        method: "turn/started",
+        params: { threadId: reviewThreadId, turn: { ...turn, id: turnId } },
+      });
+    }
     return review;
   }
 

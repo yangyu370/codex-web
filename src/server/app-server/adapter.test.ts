@@ -758,6 +758,33 @@ describe("CodexAdapter", () => {
     ]);
   });
 
+  test("does not apply a delayed review response after switching tasks", async () => {
+    let resolveReview!: (value: unknown) => void;
+    const response = new Promise<unknown>((resolve) => {
+      resolveReview = resolve;
+    });
+    const rpc = new RecordingRpcClient().result("review/start", response);
+    const state = new WebState("macos");
+    state.loadThread("t1", []);
+    const adapter = new CodexAdapter(rpc, state);
+
+    const pending = adapter.startReview("t1");
+    state.loadThread("t2", []);
+    resolveReview({
+      turn: { id: "review-1", status: "inProgress", items: [] },
+      reviewThreadId: "t1",
+    });
+
+    await expect(pending).resolves.toEqual({
+      threadId: "t1",
+      turnId: "review-1",
+      status: "inProgress",
+    });
+    expect(state.snapshot().loadedThreadId).toBe("t2");
+    expect(state.snapshot().review).toBeUndefined();
+    expect(state.snapshot().activeTurn).toBeUndefined();
+  });
+
   test("retains transport protocol errors only in bounded diagnostics", () => {
     const rpc = new ExpectedRpcClient("unused", {});
     const state = new WebState("macos");
