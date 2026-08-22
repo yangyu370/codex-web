@@ -3,7 +3,10 @@ import type {
   BrowserSnapshot,
   ModelSummary,
   PendingApproval,
+  PermissionProfileSummary,
+  ReviewState,
   ThreadSummary,
+  ThreadSettingsSummary,
   VisibleItem,
 } from "../../shared/protocol";
 import { WEB_PROTOCOL_VERSION } from "../../shared/protocol";
@@ -48,12 +51,15 @@ export class WebState {
   #sequence = 0;
   #service: BrowserSnapshot["service"];
   #models: ModelSummary[] = [];
+  #permissionProfiles: PermissionProfileSummary[] = [];
   #threads: ThreadSummary[] = [];
   #loadedThreadId?: string;
   #activeTurn?: BrowserSnapshot["activeTurn"];
   #visibleItems: VisibleItem[] = [];
   #approvals: PendingApproval[] = [];
   #tokenUsage?: BrowserSnapshot["tokenUsage"];
+  #threadSettings?: ThreadSettingsSummary;
+  #review?: ReviewState;
 
   constructor(
     platform: "macos" | "windows",
@@ -71,11 +77,14 @@ export class WebState {
       sequence: this.#sequence,
       service: this.#service,
       models: this.#models,
+      permissionProfiles: this.#permissionProfiles,
       threads: this.#threads,
       ...(this.#loadedThreadId ? { loadedThreadId: this.#loadedThreadId } : {}),
       ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
       visibleItems: this.#visibleItems,
       pendingApprovals: this.#approvals.filter((approval) => approval.status === "pending"),
+      ...(this.#threadSettings ? { threadSettings: this.#threadSettings } : {}),
+      ...(this.#review ? { review: this.#review } : {}),
       ...(this.#tokenUsage ? { tokenUsage: this.#tokenUsage } : {}),
     });
     while (snapshot.visibleItems.length > 0 && !fits(JSON.stringify(snapshot), MAX_SNAPSHOT_BYTES)) {
@@ -101,6 +110,30 @@ export class WebState {
     this.#emit("models.updated", { models: this.#models });
   }
 
+  setPermissionProfiles(profiles: PermissionProfileSummary[]): void {
+    this.#permissionProfiles = profiles.slice(0, MAX_CATALOG_ENTRIES).flatMap((profile) => {
+      if (!fits(profile.id, 512)) return [];
+      return [{
+        id: profile.id,
+        allowed: profile.allowed,
+        ...(profile.description
+          ? { description: boundOldest(profile.description, MAX_METADATA_BYTES) }
+          : {}),
+      }];
+    });
+    this.#emit("permissionProfiles.updated", { permissionProfiles: this.#permissionProfiles });
+  }
+
+  setThreadSettings(settings: ThreadSettingsSummary | undefined): void {
+    this.#threadSettings = settings;
+    this.#emit("thread.settings.updated", { threadSettings: settings });
+  }
+
+  setReview(review: ReviewState | undefined): void {
+    this.#review = review;
+    this.#emit("review.updated", { review });
+  }
+
   setThreads(threads: ThreadSummary[]): void {
     this.#threads = threads.slice(0, MAX_CATALOG_ENTRIES).flatMap(boundThread);
     this.#emit("threads.updated", { threads: this.#threads });
@@ -112,6 +145,10 @@ export class WebState {
   }
 
   loadThread(threadId: string, items: VisibleItem[]): void {
+    if (this.#loadedThreadId !== threadId) {
+      this.#threadSettings = undefined;
+      this.#review = undefined;
+    }
     this.#loadedThreadId = threadId;
     this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
     this.#trimVisibleItems();

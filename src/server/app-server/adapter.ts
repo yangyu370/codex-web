@@ -7,6 +7,7 @@ import type { WebState } from "../service/state";
 import type { ValidatedPath } from "../platform";
 import {
   decodeModelList,
+  decodePermissionProfileList,
   decodeThreadEnvelope,
   decodeThreadList,
   decodeTurns,
@@ -35,6 +36,7 @@ export class CodexAdapter {
   readonly #rpc: RpcClient;
   readonly #state: WebState;
   readonly #platform?: WorkingDirectoryValidator;
+  #permissionProfiles: ReturnType<typeof decodePermissionProfileList> = [];
 
   constructor(
     rpc: RpcClient,
@@ -65,6 +67,15 @@ export class CodexAdapter {
     const models = decodeModelList(await this.#request("model/list", {}));
     this.#state.setModels(models);
     return models;
+  }
+
+  async permissionProfiles(): Promise<ReturnType<typeof decodePermissionProfileList>> {
+    const profiles = decodePermissionProfileList(
+      await this.#request("permissionProfile/list", {}),
+    );
+    this.#permissionProfiles = profiles;
+    this.#state.setPermissionProfiles(profiles);
+    return profiles;
   }
 
   async listThreads(cursor?: string): Promise<{
@@ -100,6 +111,7 @@ export class CodexAdapter {
     const thread = { ...decoded.thread, cwd: cwd.displayPath };
     this.#state.upsertThread(thread);
     this.#state.loadThread(thread.id, decoded.items);
+    if (decoded.settings) this.#state.setThreadSettings(decoded.settings);
     return thread;
   }
 
@@ -137,6 +149,8 @@ export class CodexAdapter {
       }
       this.#state.upsertThread(decoded.thread);
       this.#state.loadThread(decoded.thread.id, items);
+      const runtime = decodeThreadEnvelope(response).settings;
+      if (runtime) this.#state.setThreadSettings(runtime);
       return decoded.thread;
     } catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith("compatibilityError:")) throw error;
@@ -153,6 +167,11 @@ export class CodexAdapter {
   async startTurn(
     threadId: string,
     input: NativeTurnInput[],
+    settings: {
+      model?: string;
+      effort?: string;
+      permissionProfile?: string;
+    } = {},
   ): Promise<{ id: string; threadId: string; status: "inProgress" }> {
     if (
       input.length === 0 ||
@@ -165,6 +184,9 @@ export class CodexAdapter {
       await this.#request("turn/start", {
         threadId,
         input,
+        ...(settings.model ? { model: settings.model } : {}),
+        ...(settings.effort ? { effort: settings.effort } : {}),
+        ...(settings.permissionProfile ? { permissions: settings.permissionProfile } : {}),
       }),
       "turn/start response",
     );
@@ -183,6 +205,54 @@ export class CodexAdapter {
   async interruptTurn(threadId: string, turnId: string): Promise<unknown> {
     await this.#request("turn/interrupt", { threadId, turnId });
     return {};
+  }
+
+  async updateThreadSettings(
+    threadId: string,
+    settings: { effort?: string; permissionProfile?: string },
+  ): Promise<unknown> {
+    if (!settings.effort && !settings.permissionProfile) {
+      throw new Error("invalidRequest: task settings update is empty");
+    }
+    if (settings.permissionProfile) {
+      const profile = this.#permissionProfiles.find(
+        (entry) => entry.id === settings.permissionProfile,
+      );
+      if (!profile || !profile.allowed) {
+        throw new Error("invalidRequest: permission profile is unavailable");
+      }
+    }
+    await this.#request("thread/settings/update", {
+      threadId,
+      ...(settings.effort ? { effort: settings.effort } : {}),
+      ...(settings.permissionProfile ? { permissions: settings.permissionProfile } : {}),
+    });
+    return {};
+  }
+
+  async startReview(threadId: string): Promise<{
+    threadId: string;
+    turnId: string;
+    status: "inProgress";
+  }> {
+    const response = record(await this.#request("review/start", {
+      threadId,
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    }), "review/start response");
+    const turn = record(response.turn, "review/start response.turn");
+    const turnId = optionalString(turn.id);
+    const reviewThreadId = optionalString(response.reviewThreadId);
+    if (!turnId || !reviewThreadId) {
+      throw new Error("compatibilityError: review/start response");
+    }
+    const review = { threadId: reviewThreadId, turnId, status: "inProgress" as const };
+    this.#state.setReview(review);
+    this.#state.applyNotification({
+      method: "turn/started",
+      params: { threadId: reviewThreadId, turn: { ...turn, id: turnId } },
+    });
+    return review;
   }
 
   resolveApproval(id: string, decision: string, deviceId = "browser"): void {
@@ -216,6 +286,7 @@ export class CodexAdapter {
     const decoded = decodeThreadEnvelope(await this.#request(method, params));
     this.#state.upsertThread(decoded.thread);
     this.#state.loadThread(decoded.thread.id, decoded.items);
+    if (decoded.settings) this.#state.setThreadSettings(decoded.settings);
     return decoded.thread;
   }
 

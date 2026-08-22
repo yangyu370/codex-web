@@ -1,6 +1,9 @@
 import type {
+  FileChangeSummary,
   ModelSummary,
+  PermissionProfileSummary,
   ThreadSummary,
+  ThreadSettingsSummary,
   VisibleItem,
 } from "../../shared/protocol";
 
@@ -23,6 +26,10 @@ export function decodeThread(value: unknown): ThreadSummary {
   const name = optionalString(thread.name) ? boundOldest(optionalString(thread.name)?.trim() ?? "", MAX_METADATA_BYTES) : undefined;
   const cwd = optionalString(thread.cwd) ? boundOldest(optionalString(thread.cwd) ?? "", MAX_METADATA_BYTES) : undefined;
   const status = decodeStatus(thread.status);
+  const source = decodeSource(thread.source);
+  const canAcceptDirectInput = typeof thread.canAcceptDirectInput === "boolean"
+    ? thread.canAcceptDirectInput
+    : undefined;
 
   return {
     id,
@@ -32,6 +39,8 @@ export function decodeThread(value: unknown): ThreadSummary {
     updatedAt,
     ...(cwd ? { cwd } : {}),
     ...(status ? { status } : {}),
+    ...(source ? { source } : {}),
+    ...(canAcceptDirectInput === undefined ? {} : { canAcceptDirectInput }),
   };
 }
 
@@ -64,24 +73,113 @@ export function decodeModelList(value: unknown): ModelSummary[] {
     const displayName = boundOldest(stringField(model, "displayName", "model.displayName"), MAX_METADATA_BYTES);
     const description = optionalString(model.description) ? boundOldest(optionalString(model.description) ?? "", MAX_METADATA_BYTES) : undefined;
     const isDefault = typeof model.isDefault === "boolean" ? model.isDefault : undefined;
+    const supportedReasoningEfforts = Array.isArray(model.supportedReasoningEfforts)
+      ? model.supportedReasoningEfforts.slice(0, 50).flatMap((value) => {
+        try {
+          const effort = record(value, "model.supportedReasoningEfforts");
+          const effortId = boundedRequiredString(
+            effort,
+            "reasoningEffort",
+            "model.supportedReasoningEfforts.reasoningEffort",
+            512,
+          );
+          const effortDescription = optionalString(effort.description);
+          return [{
+            id: effortId,
+            ...(effortDescription
+              ? { description: boundOldest(effortDescription, MAX_METADATA_BYTES) }
+              : {}),
+          }];
+        } catch {
+          return [];
+        }
+      })
+      : undefined;
+    const defaultReasoningEffort = optionalString(model.defaultReasoningEffort);
     models.push({
       id,
       displayName,
       ...(description ? { description } : {}),
       ...(isDefault === undefined ? {} : { isDefault }),
+      ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+      ...(defaultReasoningEffort
+        ? { defaultReasoningEffort: boundOldest(defaultReasoningEffort, 512) }
+        : {}),
     });
   }
   return models;
 }
 
+export function decodePermissionProfileList(value: unknown): PermissionProfileSummary[] {
+  const response = record(value, "permissionProfile/list response");
+  if (!Array.isArray(response.data)) {
+    throw new CompatibilityError("permissionProfile/list.data");
+  }
+  return response.data.slice(0, 200).flatMap((value) => {
+    try {
+      const profile = record(value, "permission profile");
+      const id = boundedRequiredString(profile, "id", "permissionProfile.id", 512);
+      if (typeof profile.allowed !== "boolean") {
+        throw new CompatibilityError("permissionProfile.allowed");
+      }
+      const description = optionalString(profile.description);
+      return [{
+        id,
+        allowed: profile.allowed,
+        ...(description ? { description: boundOldest(description, MAX_METADATA_BYTES) } : {}),
+      }];
+    } catch {
+      return [];
+    }
+  });
+}
+
 export function decodeThreadEnvelope(value: unknown): {
   thread: ThreadSummary;
   items: VisibleItem[];
+  settings?: ThreadSettingsSummary;
 } {
   const response = record(value, "thread response");
   const rawThread = record(response.thread, "thread response.thread");
   const turns = Array.isArray(rawThread.turns) ? rawThread.turns : [];
-  return { thread: decodeThread(rawThread), items: decodeTurns(turns) };
+  const thread = decodeThread(rawThread);
+  const settings = decodeThreadRuntime(response, thread.id);
+  return {
+    thread,
+    items: decodeTurns(turns),
+    ...(settings ? { settings } : {}),
+  };
+}
+
+export function decodeThreadRuntime(
+  value: unknown,
+  threadId: string,
+): ThreadSettingsSummary | undefined {
+  const runtime = record(value, "thread runtime");
+  const model = optionalString(runtime.model);
+  if (!model) return undefined;
+  const effort = optionalString(runtime.effort) ?? optionalString(runtime.reasoningEffort);
+  const approvalPolicy = normalizedPolicyLabel(runtime.approvalPolicy);
+  const sandbox = normalizedPolicyLabel(runtime.sandboxPolicy ?? runtime.sandbox);
+  const rawProfile = runtime.activePermissionProfile;
+  let permissionProfile: ThreadSettingsSummary["permissionProfile"];
+  if (rawProfile !== null && rawProfile !== undefined) {
+    const profile = record(rawProfile, "activePermissionProfile");
+    const id = boundedRequiredString(profile, "id", "activePermissionProfile.id", 512);
+    const extendsId = optionalString(profile.extends);
+    permissionProfile = {
+      id,
+      ...(extendsId ? { extends: boundOldest(extendsId, 512) } : {}),
+    };
+  }
+  return {
+    threadId: boundOldest(threadId, 512),
+    model: boundOldest(model, 512),
+    ...(effort ? { effort: boundOldest(effort, 512) } : {}),
+    ...(permissionProfile ? { permissionProfile } : {}),
+    approvalPolicy,
+    sandbox,
+  };
 }
 
 export function decodeTurns(turns: unknown[]): VisibleItem[] {
@@ -139,17 +237,31 @@ export function decodeHistoryItem(value: unknown): VisibleItem | undefined {
     };
   }
   if (type === "fileChange") {
-    const first = Array.isArray(item.changes) && item.changes.length > 0
-      ? record(item.changes[0], "fileChange.change")
-      : {};
-    const diff = boundNewest(optionalString(first.diff) ?? "", MAX_ITEM_BYTES);
+    const rawChanges = Array.isArray(item.changes) ? item.changes : [];
+    const changes = rawChanges.slice(0, 200).flatMap((value): FileChangeSummary[] => {
+      try {
+        const change = record(value, "fileChange.change");
+        const diff = boundNewest(optionalString(change.diff) ?? "", MAX_ITEM_BYTES);
+        return [{
+          path: boundOldest(optionalString(change.path) ?? "File changes", MAX_METADATA_BYTES),
+          kind: decodeChangeKind(change.kind),
+          diff: diff.value,
+          ...(diff.truncated ? { truncated: true } : {}),
+        }];
+      } catch {
+        return [];
+      }
+    });
+    const first = changes[0];
+    const truncated = rawChanges.length > 200 || changes.some((change) => change.truncated);
     return {
       id,
       type: "fileChange",
-      path: boundOldest(optionalString(first.path) ?? "File changes", MAX_METADATA_BYTES),
-      ...(diff.value ? { diff: diff.value } : {}),
+      path: first?.path ?? "File changes",
+      ...(first?.diff ? { diff: first.diff } : {}),
+      ...(changes.length > 0 ? { changes } : {}),
       status: decodeCompletedItemStatus(optionalString(item.status)),
-      ...(diff.truncated ? { truncated: true } : {}),
+      ...(truncated ? { truncated: true } : {}),
     };
   }
   if (type === "reasoning" || type === "plan") {
@@ -229,13 +341,51 @@ export function numberField(
 }
 
 function decodeStatus(value: unknown): string | undefined {
+  let status: string | undefined;
+  if (typeof value === "string") status = value;
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    status = optionalString((value as Record<string, unknown>).type);
+  }
+  if (!status) return undefined;
+  return ["notLoaded", "idle", "systemError", "active"].includes(status)
+    ? status
+    : "unknown";
+}
+
+function decodeSource(value: unknown): ThreadSummary["source"] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    const source = value as Record<string, unknown>;
+    if ("subAgent" in source) return "subAgent";
+    return "unknown";
+  }
+  if (typeof value !== "string") return "unknown";
+  return ["cli", "vscode", "exec", "appServer", "unknown"].includes(value)
+    ? value as ThreadSummary["source"]
+    : "unknown";
+}
+
+function decodeChangeKind(value: unknown): FileChangeSummary["kind"] {
   if (typeof value === "string") {
-    return value;
+    if (value === "add" || value === "delete") return value;
+    if (value === "update" || value === "modify") return "modify";
+    if (value === "rename") return "rename";
+    return "unknown";
   }
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return optionalString((value as Record<string, unknown>).type);
+    const kind = value as Record<string, unknown>;
+    if (kind.type === "add" || kind.type === "delete") return kind.type;
+    if (kind.type === "update") return optionalString(kind.move_path) ? "rename" : "modify";
   }
-  return undefined;
+  return "unknown";
+}
+
+function normalizedPolicyLabel(value: unknown): string {
+  if (typeof value === "string") return boundOldest(value, MAX_METADATA_BYTES);
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return boundOldest(optionalString((value as Record<string, unknown>).type) ?? "custom", MAX_METADATA_BYTES);
+  }
+  return "unknown";
 }
 
 function decodeUserContent(value: unknown): string {

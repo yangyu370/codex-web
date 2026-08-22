@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import type { JsonRpcNotification, JsonRpcServerRequest } from "./json-rpc";
 import { CodexAdapter, type RpcClient } from "./adapter";
-import { decodeHistoryItem, decodeModelList, decodeThread } from "./decoders";
+import {
+  decodeHistoryItem,
+  decodeModelList,
+  decodePermissionProfileList,
+  decodeThread,
+  decodeThreadRuntime,
+} from "./decoders";
 import { WebState } from "../service/state";
 
 class ExpectedRpcClient implements RpcClient {
@@ -64,6 +70,26 @@ class ExpectedRpcClient implements RpcClient {
   }
 }
 
+class RecordingRpcClient implements RpcClient {
+  readonly requests: Array<{ method: string; params: unknown }> = [];
+  readonly #results = new Map<string, unknown>();
+
+  result(method: string, value: unknown): this {
+    this.#results.set(method, value);
+    return this;
+  }
+
+  request(method: string, params: unknown): Promise<unknown> {
+    this.requests.push({ method, params });
+    const value = this.#results.get(method);
+    return value instanceof Error ? Promise.reject(value) : Promise.resolve(value ?? {});
+  }
+
+  respond(): void {}
+  onNotification(): () => void { return () => undefined; }
+  onServerRequest(): () => void { return () => undefined; }
+}
+
 describe("tolerant decoders", () => {
   test("keeps required thread fields and tolerates newer fields", () => {
     expect(
@@ -98,6 +124,11 @@ describe("tolerant decoders", () => {
             description: "Frontier coding",
             hidden: false,
             isDefault: true,
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "Fast" },
+              { reasoningEffort: "high", description: "Thorough" },
+            ],
+            defaultReasoningEffort: "high",
             futureField: "ignored",
           },
           { id: "hidden", displayName: "Hidden", hidden: true },
@@ -109,8 +140,89 @@ describe("tolerant decoders", () => {
         displayName: "GPT-5.6",
         description: "Frontier coding",
         isDefault: true,
+        supportedReasoningEfforts: [
+          { id: "low", description: "Fast" },
+          { id: "high", description: "Thorough" },
+        ],
+        defaultReasoningEffort: "high",
       },
     ]);
+  });
+
+  test("decodes bounded permission profiles", () => {
+    expect(decodePermissionProfileList({
+      data: [
+        { id: ":workspace", description: "Workspace access", allowed: true },
+        { id: ":read-only", description: null, allowed: false },
+      ],
+    })).toEqual([
+      { id: ":workspace", description: "Workspace access", allowed: true },
+      { id: ":read-only", allowed: false },
+    ]);
+  });
+
+  test("normalizes thread source, status, and direct-input capability", () => {
+    expect(decodeThread({
+      id: "t-live",
+      preview: "CLI work",
+      createdAt: 10,
+      updatedAt: 20,
+      status: { type: "active", activeFlags: [] },
+      source: { subAgent: "review" },
+      canAcceptDirectInput: true,
+    })).toMatchObject({
+      source: "subAgent",
+      status: "active",
+      canAcceptDirectInput: true,
+    });
+    expect(decodeThread({
+      id: "t-future",
+      preview: "Future source",
+      createdAt: 10,
+      status: { type: "futureStatus" },
+      source: "futureSource",
+    })).toMatchObject({ source: "unknown", status: "unknown" });
+  });
+
+  test("decodes runtime settings without exposing raw policy objects", () => {
+    expect(decodeThreadRuntime({
+      model: "gpt-5.6",
+      reasoningEffort: "high",
+      approvalPolicy: "on-request",
+      sandbox: {
+        type: "workspaceWrite",
+        writableRoots: ["/private/root"],
+        networkAccess: false,
+      },
+      activePermissionProfile: { id: ":workspace", extends: null },
+    }, "t1")).toEqual({
+      threadId: "t1",
+      model: "gpt-5.6",
+      effort: "high",
+      approvalPolicy: "on-request",
+      sandbox: "workspaceWrite",
+      permissionProfile: { id: ":workspace" },
+    });
+  });
+
+  test("preserves every bounded file change in a history item", () => {
+    expect(decodeHistoryItem({
+      id: "patch-1",
+      type: "fileChange",
+      status: "completed",
+      changes: [
+        { path: "a.ts", kind: { type: "update", move_path: null }, diff: "+a" },
+        { path: "b.ts", kind: { type: "delete" }, diff: "-b" },
+      ],
+    })).toMatchObject({
+      type: "fileChange",
+      path: "a.ts",
+      diff: "+a",
+      changes: [
+        { path: "a.ts", kind: "modify", diff: "+a" },
+        { path: "b.ts", kind: "delete", diff: "-b" },
+      ],
+    });
   });
 
   test("fails only the affected decode when a required field is missing", () => {
@@ -376,6 +488,53 @@ describe("WebState", () => {
 });
 
 describe("CodexAdapter", () => {
+  test("lists profiles, validates selection, updates settings, and starts inline review", async () => {
+    const rpc = new RecordingRpcClient()
+      .result("permissionProfile/list", {
+        data: [
+          { id: ":workspace", description: "Workspace access", allowed: true },
+          { id: ":blocked", description: "Blocked", allowed: false },
+        ],
+      })
+      .result("thread/settings/update", {})
+      .result("review/start", {
+        turn: { id: "review-1", status: "inProgress", items: [] },
+        reviewThreadId: "t1",
+      });
+    const state = new WebState("macos");
+    const adapter = new CodexAdapter(rpc, state);
+
+    await adapter.permissionProfiles();
+    await adapter.updateThreadSettings("t1", {
+      effort: "high",
+      permissionProfile: ":workspace",
+    });
+    await expect(adapter.updateThreadSettings("t1", {
+      permissionProfile: ":blocked",
+    })).rejects.toThrow("invalidRequest");
+    await expect(adapter.startReview("t1")).resolves.toEqual({
+      threadId: "t1",
+      turnId: "review-1",
+      status: "inProgress",
+    });
+
+    expect(rpc.requests).toEqual([
+      { method: "permissionProfile/list", params: {} },
+      {
+        method: "thread/settings/update",
+        params: { threadId: "t1", effort: "high", permissions: ":workspace" },
+      },
+      {
+        method: "review/start",
+        params: {
+          threadId: "t1",
+          target: { type: "uncommittedChanges" },
+          delivery: "inline",
+        },
+      },
+    ]);
+  });
+
   test("retains transport protocol errors only in bounded diagnostics", () => {
     const rpc = new ExpectedRpcClient("unused", {});
     const state = new WebState("macos");
@@ -591,6 +750,9 @@ describe("CodexAdapter", () => {
           { type: "text", text: "Run tests" },
           { type: "localImage", path: "/work/.codex-web/attachments/s/image.png" },
         ],
+        model: "gpt-5.6",
+        effort: "high",
+        permissions: ":workspace",
       },
     );
     const state = new WebState("macos");
@@ -598,7 +760,11 @@ describe("CodexAdapter", () => {
     await expect(startAdapter.startTurn("t1", [
       { type: "text", text: "Run tests" },
       { type: "localImage", path: "/work/.codex-web/attachments/s/image.png" },
-    ])).resolves.toEqual({
+    ], {
+      model: "gpt-5.6",
+      effort: "high",
+      permissionProfile: ":workspace",
+    })).resolves.toEqual({
       id: "turn2",
       threadId: "t1",
       status: "inProgress",
