@@ -14,6 +14,7 @@ let buffer = "";
 let nextThreadId = 1;
 let nextTurnId = 1;
 let nextApprovalId = 900;
+const taskSettings = new Map<string, { model: string; effort: string; permissionProfile: string }>();
 const pendingApprovals = new Map<string | number, {
   itemId: string;
   threadId: string;
@@ -38,8 +39,25 @@ async function handle(message: Record<string, unknown>): Promise<void> {
   if (method === "initialize") return respond(id, { userAgent: "fake-codex" });
   if (method === "model/list") {
     return respond(id, {
-      data: [{ id: "gpt-fake", displayName: "GPT Fake", isDefault: true }],
+      data: [{
+        id: "gpt-fake",
+        displayName: "GPT Fake",
+        isDefault: true,
+        defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: [
+          { reasoningEffort: "low", description: "Fast responses" },
+          { reasoningEffort: "medium", description: "Balanced" },
+          { reasoningEffort: "high", description: "Deeper analysis" },
+        ],
+      }],
     });
+  }
+  if (method === "permissionProfile/list") {
+    return respond(id, { data: [
+      { id: ":read-only", description: "Read without editing", allowed: true },
+      { id: ":workspace", description: "Edit this workspace", allowed: true },
+      { id: ":managed", description: "Blocked by managed policy", allowed: false },
+    ] });
   }
   if (method === "thread/list") {
     return respond(id, {
@@ -59,6 +77,11 @@ async function handle(message: Record<string, unknown>): Promise<void> {
     const params = message.params as Record<string, unknown>;
     const threadId = `thread-e2e-${nextThreadId}`;
     nextThreadId += 1;
+    taskSettings.set(threadId, {
+      model: String(params.model ?? "gpt-fake"),
+      effort: "medium",
+      permissionProfile: ":read-only",
+    });
     return respond(id, {
       thread: {
         id: threadId,
@@ -70,7 +93,55 @@ async function handle(message: Record<string, unknown>): Promise<void> {
         status: { type: "idle" },
         turns: [],
       },
+      model: String(params.model ?? "gpt-fake"),
+      effort: "medium",
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+      activePermissionProfile: { id: ":read-only", extends: null },
     });
+  }
+  if (method === "thread/settings/update") {
+    const params = message.params as Record<string, unknown>;
+    const threadId = String(params.threadId);
+    const current = taskSettings.get(threadId) ?? {
+      model: "gpt-fake",
+      effort: "medium",
+      permissionProfile: ":read-only",
+    };
+    const next = {
+      ...current,
+      ...(typeof params.effort === "string" ? { effort: params.effort } : {}),
+      ...(typeof params.permissions === "string" ? { permissionProfile: params.permissions } : {}),
+    };
+    taskSettings.set(threadId, next);
+    respond(id, {});
+    notify("thread/settings/updated", {
+      threadId,
+      threadSettings: {
+        model: next.model,
+        effort: next.effort,
+        approvalPolicy: "on-request",
+        sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+        activePermissionProfile: { id: next.permissionProfile, extends: null },
+      },
+    });
+    return;
+  }
+  if (method === "review/start") {
+    const params = message.params as Record<string, unknown>;
+    const threadId = String(params.threadId);
+    const turnId = `review-e2e-${nextTurnId++}`;
+    respond(id, {
+      reviewThreadId: threadId,
+      turn: { id: turnId, status: "inProgress", items: [] },
+    });
+    notify("turn/diff/updated", {
+      threadId,
+      turnId,
+      diff: `diff --git a/src/hello.ts b/src/hello.ts\n--- a/src/hello.ts\n+++ b/src/hello.ts\n@@ -1,2 +1,2 @@\n-export const greeting = "hello";\n+export const greeting = "hello from web";\n console.log(greeting);`,
+    });
+    notify("turn/completed", { threadId, turn: { id: turnId, status: "completed" } });
+    return;
   }
   if (method === "turn/start") {
     const params = message.params as Record<string, unknown>;

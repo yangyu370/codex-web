@@ -2,16 +2,17 @@
 
 在 macOS 或 Windows 上用浏览器管理本机 Codex。
 
-Codex Web 在运行 Codex 的电脑上启动一个 Bun 服务，由它管理 `codex app-server`。浏览器只连接 Codex Web，不直接启动 Codex，也不会接触原始 app-server 协议。
+Codex Web 在运行 Codex 的电脑上启动一个 Bun 服务。macOS 会优先连接由 Codex Web 管理的共享 `codex app-server` 守护进程，让之后启动的 CLI 任务可以被网页实时接管；浏览器只连接 Codex Web，不直接接触原始 app-server 协议。
 
 > 这是一个非官方项目，与 OpenAI 没有关联。当前版本面向个人使用，Linux 和 WSL 暂不支持。
 
 ## 功能
 
-- 新建任务或继续本机已有的 Codex 任务
-- 选择模型、工作目录并发送消息
+- 新建任务，或在 Web 中实时继续兼容的 CLI 任务
+- 按任务查看模型并调整思考强度、权限配置
 - 浏览运行 Codex Web 那台电脑上的项目目录
-- 查看回答、命令、文件变更、计划和运行状态
+- 查看回答、命令、文件变更、结构化 diff、计划和运行状态
+- 对未提交变更发起内联 Code Review
 - 在网页中处理 Codex 的审批请求
 - 上传文本、源码、PDF 和图片作为单次消息的上下文
 - 同一套 Web UI 支持原生 macOS 和 Windows
@@ -56,6 +57,24 @@ bun install
 ```
 
 启动完成后访问 [http://127.0.0.1:4173](http://127.0.0.1:4173)。启动脚本会先构建前端，再启动服务；它不会安装或升级 Bun、Codex，也不会修改现有的 `CODEX_HOME`。
+
+### macOS 实时接管顺序
+
+需要从 CLI 切换到 Web 继续时，请先启动 Codex Web，再启动新的 Codex CLI 会话：
+
+```text
+Codex Web / 共享 app-server → Codex CLI → Web 中选择带 LIVE · CLI 标记的任务
+```
+
+Web 会在窗口重新获得焦点时刷新任务目录，并持续接收共享会话事件。Web、CLI 中任一端均可继续输入、处理中断和审批；已被另一端处理的审批会作为正常同步竞争刷新，不会显示成致命错误。
+
+当前边界：
+
+- macOS：支持共享守护进程下 CLI ↔ Web 实时接管；共享模式不可用时自动退回独立 app-server。
+- Windows：继续使用独立 app-server，可查看本机历史任务，但不承诺 CLI 实时接管。
+- Codex Desktop 创建的任务：当前为历史查看模式，不显示为 LIVE，也不能由 Web 继续输入。
+
+任务的权限和思考强度来自 Codex 原生元数据。运行中的修改从下一回合生效；Web 只把成功选择保存为新任务默认值，不覆盖 Codex 的全局配置。
 
 如果 Codex 不在 `PATH` 中，可以手动指定：
 

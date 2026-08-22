@@ -92,3 +92,40 @@ test("uploads server-side context and removes it after the turn", async ({ page 
     await rm(project, { recursive: true, force: true });
   }
 });
+
+test("changes task controls and reviews a structured diff inline", async ({ page }, testInfo) => {
+  await page.goto("/");
+  if (testInfo.project.name === "mobile") {
+    await page.getByRole("button", { name: "Tasks" }).click();
+  }
+  await page.getByRole("button", { name: "New task" }).click();
+  await page.getByRole("combobox", { name: "Working directory" }).fill(process.cwd());
+  await page.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");
+  await page.getByRole("combobox", { name: "Permission profile" }).selectOption(":workspace");
+  await page.getByRole("textbox", { name: "Message Codex" }).fill("Create a file to review");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  if (testInfo.project.name === "mobile") {
+    await page.getByRole("button", { name: "Activity" }).click();
+  }
+  await expect(page.getByText("Approve file changes")).toBeVisible();
+  await page.getByRole("button", { name: "Approve" }).dispatchEvent("click");
+  await expect(page.getByLabel("Activity").getByText("Turn completed")).toBeVisible();
+
+  if (testInfo.project.name === "mobile") {
+    await page.getByRole("button", { name: "Chat" }).click();
+  }
+  await page.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");
+  await page.getByRole("combobox", { name: "Permission profile" }).selectOption(":workspace");
+  await page.getByRole("button", { name: "Review changes" }).click();
+
+  const changes = page.getByLabel("Changes");
+  await expect(changes.getByRole("button", { name: /src\/hello\.ts/ })).toBeVisible();
+  await expect(changes.getByText('export const greeting = "hello from web";')).toBeVisible();
+  await expect(changes.getByText("2").first()).toBeVisible();
+  const viewport = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+});
