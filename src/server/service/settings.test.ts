@@ -14,6 +14,8 @@ describe("SettingsStore", () => {
       await store.save({
         recentDirectories: paths,
         model: "gpt-5.6",
+        effort: "high",
+        permissionProfile: ":workspace",
         theme: "dark",
         commandOutput: "must not be persisted",
       } as never);
@@ -21,6 +23,8 @@ describe("SettingsStore", () => {
       expect(await store.read()).toEqual({
         recentDirectories: paths.slice(0, 20),
         model: "gpt-5.6",
+        effort: "high",
+        permissionProfile: ":workspace",
         theme: "dark",
       });
       expect(await readFile(path.join(directory, "settings.json"), "utf8")).not.toContain(
@@ -51,6 +55,21 @@ describe("SettingsStore", () => {
       expect(await store.read()).toEqual({ recentDirectories: ["/ok"] });
 
       await Bun.write(path.join(directory, "settings.json"), "x".repeat(20_000));
+      expect(await store.read()).toEqual({ recentDirectories: [] });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("drops oversized task-control defaults", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codex-web-settings-"));
+    try {
+      const store = new SettingsStore(directory);
+      await store.save({
+        recentDirectories: [],
+        effort: "x".repeat(201),
+        permissionProfile: "p".repeat(201),
+      } as never);
       expect(await store.read()).toEqual({ recentDirectories: [] });
     } finally {
       await rm(directory, { recursive: true, force: true });

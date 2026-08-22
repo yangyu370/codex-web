@@ -29,6 +29,43 @@ describe("parseClientMessage", () => {
     });
   });
 
+  test("accepts task settings, permission catalog, and review requests", () => {
+    expect(
+      parseClientMessage(
+        '{"kind":"request","id":"r3","method":"permissionProfile.list","params":{}}',
+      ),
+    ).toEqual({
+      kind: "request",
+      id: "r3",
+      method: "permissionProfile.list",
+      params: {},
+    });
+    expect(
+      parseClientMessage(
+        '{"kind":"request","id":"r4","method":"thread.settings.update","params":{"threadId":"thread-1","effort":"high","permissionProfile":":workspace"}}',
+      ),
+    ).toEqual({
+      kind: "request",
+      id: "r4",
+      method: "thread.settings.update",
+      params: {
+        threadId: "thread-1",
+        effort: "high",
+        permissionProfile: ":workspace",
+      },
+    });
+    expect(
+      parseClientMessage(
+        '{"kind":"request","id":"r5","method":"review.start","params":{"threadId":"thread-1"}}',
+      ),
+    ).toEqual({
+      kind: "request",
+      id: "r5",
+      method: "review.start",
+      params: { threadId: "thread-1" },
+    });
+  });
+
   test("rejects unknown envelope kinds", () => {
     expect(() => parseClientMessage('{"kind":"raw-app-server"}')).toThrow(
       "invalidRequest",

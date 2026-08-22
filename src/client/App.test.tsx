@@ -76,6 +76,37 @@ describe("Codex web shell", () => {
     expect(persisted.at(-1)?.recentDirectories).toEqual(["/work/b", "/work/a"]);
   });
 
+  test("preserves task-control defaults after a successful send", async () => {
+    const persisted: Array<{
+      recentDirectories: string[];
+      model?: string;
+      effort?: string;
+      permissionProfile?: string;
+    }> = [];
+    render(
+      <App
+        initialSettings={{
+          recentDirectories: ["/work/app"],
+          model: "gpt-5.6",
+          effort: "high",
+          permissionProfile: ":workspace",
+        }}
+        initialSnapshot={emptySnapshot}
+        onPersistSettings={(value) => persisted.push(value)}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "Message Codex" }), "Continue");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(persisted.at(-1)).toEqual({
+      recentDirectories: ["/work/app"],
+      model: "gpt-5.6",
+      effort: "high",
+      permissionProfile: ":workspace",
+    });
+  });
+
   test("renders loaded conversation and pending work", () => {
     render(
       <App

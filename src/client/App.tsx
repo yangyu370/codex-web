@@ -35,6 +35,8 @@ export interface AppProps {
 export interface ClientSettings {
   recentDirectories: string[];
   model?: string;
+  effort?: string;
+  permissionProfile?: string;
 }
 
 export function App({
@@ -285,6 +287,8 @@ export function App({
       const nextSettings = {
         recentDirectories: [cwd, ...settings.recentDirectories.filter((entry) => entry !== cwd)].slice(0, 20),
         model,
+        ...(settings.effort ? { effort: settings.effort } : {}),
+        ...(settings.permissionProfile ? { permissionProfile: settings.permissionProfile } : {}),
       };
       setSettings(nextSettings);
       onPersistSettings?.(nextSettings);

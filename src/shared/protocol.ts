@@ -2,17 +2,20 @@ import { z } from "zod";
 
 export const MAX_BROWSER_MESSAGE_BYTES = 65_536;
 export const MAX_SERVER_MESSAGE_BYTES = 8_388_608;
-export const WEB_PROTOCOL_VERSION = 2;
+export const WEB_PROTOCOL_VERSION = 3;
 
 export const browserMethods = [
   "directory.list",
   "model.list",
+  "permissionProfile.list",
   "thread.list",
   "thread.start",
   "thread.resume",
   "thread.read",
+  "thread.settings.update",
   "turn.start",
   "turn.interrupt",
+  "review.start",
   "approval.resolve",
 ] as const;
 
@@ -68,6 +71,19 @@ export interface ModelSummary {
   displayName: string;
   description?: string;
   isDefault?: boolean;
+  supportedReasoningEfforts?: ReasoningEffortOption[];
+  defaultReasoningEffort?: string;
+}
+
+export interface ReasoningEffortOption {
+  id: string;
+  description?: string;
+}
+
+export interface PermissionProfileSummary {
+  id: string;
+  description?: string;
+  allowed: boolean;
 }
 
 export interface DirectoryEntry {
@@ -110,6 +126,40 @@ export interface ThreadSummary {
   updatedAt: number;
   cwd?: string;
   status?: string;
+  source?: "cli" | "vscode" | "exec" | "appServer" | "subAgent" | "unknown";
+  canAcceptDirectInput?: boolean;
+}
+
+export interface ThreadSettingsSummary {
+  threadId: string;
+  model: string;
+  effort?: string;
+  permissionProfile?: {
+    id: string;
+    extends?: string;
+  };
+  approvalPolicy: string;
+  sandbox: string;
+}
+
+export interface FileChangeSummary {
+  path: string;
+  kind: "add" | "modify" | "delete" | "rename" | "unknown";
+  diff: string;
+  truncated?: boolean;
+}
+
+export interface TurnDiffSummary {
+  threadId: string;
+  turnId: string;
+  diff: string;
+  truncated?: boolean;
+}
+
+export interface ReviewState {
+  threadId: string;
+  turnId: string;
+  status: "inProgress" | "completed" | "interrupted" | "failed";
 }
 
 export type VisibleItem =
@@ -136,6 +186,7 @@ export type VisibleItem =
       type: "fileChange";
       path: string;
       diff?: string;
+      changes?: FileChangeSummary[];
       status: "running" | "completed" | "failed";
       truncated?: boolean;
     }
@@ -171,8 +222,10 @@ export interface BrowserSnapshot {
     platform: "macos" | "windows";
     codexVersion?: string;
     error?: WebError;
+    liveHandoff?: "available" | "unavailable";
   };
   models: ModelSummary[];
+  permissionProfiles?: PermissionProfileSummary[];
   threads: ThreadSummary[];
   loadedThreadId?: string;
   activeTurn?: {
@@ -182,6 +235,9 @@ export interface BrowserSnapshot {
   };
   visibleItems: VisibleItem[];
   pendingApprovals: PendingApproval[];
+  threadSettings?: ThreadSettingsSummary;
+  turnDiff?: TurnDiffSummary;
+  review?: ReviewState;
   tokenUsage?: {
     used: number;
     contextWindow?: number;

@@ -8,6 +8,8 @@ const MAX_DIRECTORY_BYTES = 4_096;
 export interface UserSettings {
   recentDirectories: string[];
   model?: string;
+  effort?: string;
+  permissionProfile?: string;
   theme?: "light" | "dark" | "system";
 }
 
@@ -56,6 +58,8 @@ function normalizeSettings(value: unknown): UserSettings {
         .slice(0, MAX_RECENT_DIRECTORIES)
     : [];
   const model = boundedString(value.model, 200);
+  const effort = boundedString(value.effort, 200);
+  const permissionProfile = boundedString(value.permissionProfile, 200);
   const theme =
     value.theme === "light" || value.theme === "dark" || value.theme === "system"
       ? value.theme
@@ -63,6 +67,8 @@ function normalizeSettings(value: unknown): UserSettings {
   return {
     recentDirectories,
     ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(permissionProfile ? { permissionProfile } : {}),
     ...(theme ? { theme } : {}),
   };
 }
