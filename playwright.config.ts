@@ -13,7 +13,14 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"], channel: "chrome" } },
+    {
+      name: "desktop",
+      use: { ...devices["Desktop Chrome"], channel: "chrome", viewport: { width: 1_440, height: 900 } },
+    },
+    {
+      name: "tablet",
+      use: { browserName: "chromium", channel: "chrome", viewport: { width: 900, height: 900 } },
+    },
     {
       name: "mobile",
       use: { ...devices["iPhone 13"], browserName: "chromium", channel: "chrome" },

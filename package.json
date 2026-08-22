@@ -9,7 +9,8 @@
     "build": "vite build",
     "start": "bun src/server/index.ts",
     "test:e2e": "playwright test",
-    "test:smoke": "bun tests/smoke/native.ts",
+    "test:smoke": "bun tests/smoke/shared-daemon.ts",
+    "test:smoke:daemon": "bun tests/smoke/shared-daemon.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

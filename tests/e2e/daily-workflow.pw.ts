@@ -31,7 +31,7 @@ test("daily Codex workflow", async ({ page }, testInfo) => {
   await page.getByRole("combobox", { name: "Working directory" }).fill(process.cwd());
   await page.getByRole("textbox", { name: "Message Codex" }).fill("Create a file");
   await page.getByRole("button", { name: "Send" }).click();
-  if (testInfo.project.name === "mobile") {
+  if (testInfo.project.name !== "desktop") {
     await page.getByRole("button", { name: "Activity" }).click();
   }
   await expect(page.getByText("Approve file changes")).toBeVisible();
@@ -74,7 +74,7 @@ test("uploads server-side context and removes it after the turn", async ({ page 
     await expect(page.getByText("pixel.png")).toBeVisible();
     await expect(page.getByText(/Ready/)).toHaveCount(2);
     await page.getByRole("button", { name: "Send" }).click();
-    if (testInfo.project.name === "mobile") {
+    if (testInfo.project.name !== "desktop") {
       await page.getByRole("button", { name: "Activity" }).click();
     }
     await expect(page.getByText("Approve file changes")).toBeVisible();
@@ -105,14 +105,14 @@ test("changes task controls and reviews a structured diff inline", async ({ page
   await page.getByRole("textbox", { name: "Message Codex" }).fill("Create a file to review");
   await page.getByRole("button", { name: "Send" }).click();
 
-  if (testInfo.project.name === "mobile") {
+  if (testInfo.project.name !== "desktop") {
     await page.getByRole("button", { name: "Activity" }).click();
   }
   await expect(page.getByText("Approve file changes")).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).dispatchEvent("click");
   await expect(page.getByLabel("Activity").getByText("Turn completed")).toBeVisible();
 
-  if (testInfo.project.name === "mobile") {
+  if (testInfo.project.name !== "desktop") {
     await page.getByRole("button", { name: "Chat" }).click();
   }
   await page.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");

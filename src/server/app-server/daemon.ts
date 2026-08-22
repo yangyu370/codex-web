@@ -1,3 +1,4 @@
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import type { PlatformRuntime } from "../platform";
@@ -65,9 +66,9 @@ export function parseDaemonStartOutput(
     throw new Error("Codex daemon returned a non-absolute socket path");
   }
 
-  const resolvedHome = path.posix.resolve(codexHome);
+  const resolvedHome = canonicalizePath(codexHome);
   const resolvedSocket = path.posix.resolve(value.socketPath);
-  const relative = path.posix.relative(resolvedHome, resolvedSocket);
+  const relative = path.posix.relative(resolvedHome, canonicalizeSocketPath(resolvedSocket));
   if (!relative || relative === ".." || relative.startsWith(`..${path.posix.sep}`) || path.posix.isAbsolute(relative)) {
     throw new Error("Codex daemon socket is outside the active Codex home");
   }
@@ -79,6 +80,51 @@ export function parseDaemonStartOutput(
     socketPath: resolvedSocket,
     appServerVersion: value.appServerVersion,
   };
+}
+
+function canonicalizeSocketPath(source: string): string {
+  try {
+    if (lstatSync(source).isSymbolicLink()) {
+      throw new Error("Codex daemon socket must not be a symbolic link");
+    }
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : undefined;
+    if (code !== "ENOENT") {
+      if (error instanceof Error && error.message.includes("must not be a symbolic link")) {
+        throw error;
+      }
+      throw new Error(`Codex daemon path could not be validated (${code ?? "unknown"})`);
+    }
+  }
+  return path.posix.join(
+    canonicalizePath(path.posix.dirname(source)),
+    path.posix.basename(source),
+  );
+}
+
+function canonicalizePath(source: string): string {
+  let existingAncestor = path.posix.resolve(source);
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      return path.posix.join(realpathSync.native(existingAncestor), ...missingSegments);
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error
+        ? String(error.code)
+        : undefined;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw new Error(`Codex daemon path could not be validated (${code ?? "unknown"})`);
+      }
+      const parent = path.posix.dirname(existingAncestor);
+      if (parent === existingAncestor) {
+        throw new Error("Codex daemon path could not be validated");
+      }
+      missingSegments.unshift(path.posix.basename(existingAncestor));
+      existingAncestor = parent;
+    }
+  }
 }
 
 async function readBounded(stream: ReadableStream<Uint8Array>): Promise<string> {

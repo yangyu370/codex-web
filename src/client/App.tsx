@@ -553,7 +553,7 @@ export function App({
           }}
         />
       ) : null}
-      <nav aria-label="Mobile sections" className="mobile-tabs">
+      <nav aria-label="Workspace sections" className="mobile-tabs">
         <button data-active={mobileView === "tasks"} onClick={() => setMobileView("tasks")} type="button">
           <Rows3 size={16} /> Tasks
         </button>

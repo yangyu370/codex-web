@@ -177,10 +177,12 @@ bun run build
 bun run test:e2e
 ```
 
-可选的本机 Codex 冒烟测试不会启动模型回合，并会在测试后归档临时任务：
+可选的 macOS 本机冒烟测试会建立隔离的临时 Codex home 和两个 daemon 客户端，
+通过两个最小模型回合验证主客户端断开后另一客户端仍能接收并继续任务，因此会产生少量模型用量。
+测试结束后会归档临时任务、停止隔离 daemon 并删除临时目录：
 
 ```sh
-CODEX_WEB_SMOKE=1 bun run test:smoke
+CODEX_WEB_SMOKE=1 bun run test:smoke:daemon
 ```
 
 ## 安全说明

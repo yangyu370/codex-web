@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 import type { AppServerProcess, PlatformRuntime } from "../platform";
 import { parseDaemonStartOutput, startManagedDaemon } from "./daemon";
@@ -6,7 +8,7 @@ import { parseDaemonStartOutput, startManagedDaemon } from "./daemon";
 const codexHome = "/Users/test/.codex";
 const socketPath = `${codexHome}/app-server-control/app-server-control.sock`;
 
-describe("parseDaemonStartOutput", () => {
+describe.skipIf(process.platform !== "darwin")("parseDaemonStartOutput", () => {
   test.each(["started", "alreadyRunning"])("accepts %s daemon lifecycle output", (status) => {
     expect(parseDaemonStartOutput(JSON.stringify({
       status,
@@ -26,9 +28,53 @@ describe("parseDaemonStartOutput", () => {
   ])("rejects %s", (_label, output) => {
     expect(() => parseDaemonStartOutput(output, codexHome)).toThrow();
   });
+
+  test("accepts a socket under the canonical target of a symlinked Codex home", async () => {
+    const root = await mkdtemp("/tmp/cw-daemon-path-");
+    const realHome = path.join(root, "real-home");
+    const linkedHome = path.join(root, "linked-home");
+    const canonicalSocket = path.join(
+      realHome,
+      "app-server-control",
+      "app-server-control.sock",
+    );
+    try {
+      await mkdir(path.dirname(canonicalSocket), { recursive: true });
+      await symlink(realHome, linkedHome);
+
+      expect(parseDaemonStartOutput(JSON.stringify({
+        status: "started",
+        socketPath: canonicalSocket,
+      }), linkedHome)).toEqual({
+        socketPath: canonicalSocket,
+        appServerVersion: undefined,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a symbolic-link daemon socket", async () => {
+    const root = await mkdtemp("/tmp/cw-daemon-socket-");
+    const home = path.join(root, "home");
+    const socket = path.join(home, "app-server-control", "app-server-control.sock");
+    const outside = path.join(root, "outside.sock");
+    try {
+      await mkdir(path.dirname(socket), { recursive: true });
+      await writeFile(outside, "not a socket");
+      await symlink(outside, socket);
+
+      expect(() => parseDaemonStartOutput(JSON.stringify({
+        status: "started",
+        socketPath: socket,
+      }), home)).toThrow("must not be a symbolic link");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
-describe("startManagedDaemon", () => {
+describe.skipIf(process.platform !== "darwin")("startManagedDaemon", () => {
   test("spawns the idempotent lifecycle command with the active Codex home", async () => {
     const commands: string[][] = [];
     const environments: Record<string, string>[] = [];
