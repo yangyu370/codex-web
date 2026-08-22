@@ -402,6 +402,118 @@ describe("WebState", () => {
     expect(new TextEncoder().encode(item.text).byteLength).toBeLessThanOrEqual(262_144);
   });
 
+  test("applies authoritative task settings and bounded turn diffs for the loaded thread", () => {
+    const state = new WebState("macos");
+    state.loadThread("thread-1", []);
+    state.applyNotification({
+      method: "thread/settings/updated",
+      params: {
+        threadId: "thread-1",
+        threadSettings: {
+          cwd: "/work/app",
+          model: "gpt-5.6",
+          effort: "high",
+          approvalPolicy: "on-request",
+          sandboxPolicy: {
+            type: "workspaceWrite",
+            writableRoots: [],
+            networkAccess: false,
+          },
+          activePermissionProfile: { id: ":workspace", extends: null },
+        },
+      },
+    });
+    state.applyNotification({
+      method: "turn/diff/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        diff: `old${"x".repeat(1_100_000)}new`,
+      },
+    });
+
+    expect(state.snapshot().threadSettings).toEqual({
+      threadId: "thread-1",
+      model: "gpt-5.6",
+      effort: "high",
+      approvalPolicy: "on-request",
+      sandbox: "workspaceWrite",
+      permissionProfile: { id: ":workspace" },
+    });
+    expect(state.snapshot().turnDiff).toMatchObject({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      truncated: true,
+    });
+    expect(state.snapshot().turnDiff?.diff).not.toContain("old");
+    expect(state.snapshot().turnDiff?.diff).toEndWith("new");
+  });
+
+  test("tracks inline review entry, exit, and terminal turn status", () => {
+    const state = new WebState("macos");
+    state.loadThread("thread-1", []);
+    state.applyNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "review-1",
+        item: { id: "entered", type: "enteredReviewMode", review: "Reviewing changes" },
+      },
+    });
+    expect(state.snapshot().review).toEqual({
+      threadId: "thread-1",
+      turnId: "review-1",
+      status: "inProgress",
+    });
+    expect(state.snapshot().visibleItems[0]).toMatchObject({
+      id: "entered",
+      type: "status",
+      text: "Reviewing changes",
+    });
+
+    state.applyNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "review-1",
+        item: { id: "exited", type: "exitedReviewMode", review: "Review complete" },
+      },
+    });
+    expect(state.snapshot().review?.status).toBe("completed");
+
+    state.setReview({ threadId: "thread-1", turnId: "review-2", status: "inProgress" });
+    state.applyNotification({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "review-2", status: "failed" },
+      },
+    });
+    expect(state.snapshot().review?.status).toBe("failed");
+  });
+
+  test("clears task-scoped settings, diff, and review when switching threads", () => {
+    const state = new WebState("macos");
+    state.loadThread("thread-1", []);
+    state.setThreadSettings({
+      threadId: "thread-1",
+      model: "gpt-5.6",
+      approvalPolicy: "on-request",
+      sandbox: "workspaceWrite",
+    });
+    state.setReview({ threadId: "thread-1", turnId: "review-1", status: "inProgress" });
+    state.applyNotification({
+      method: "turn/diff/updated",
+      params: { threadId: "thread-1", turnId: "turn-1", diff: "+change" },
+    });
+
+    state.loadThread("thread-2", []);
+
+    expect(state.snapshot()).not.toHaveProperty("threadSettings");
+    expect(state.snapshot()).not.toHaveProperty("turnDiff");
+    expect(state.snapshot()).not.toHaveProperty("review");
+  });
+
   test("applies current file patch and turn error notifications", () => {
     const state = new WebState("macos");
     state.applyNotification({

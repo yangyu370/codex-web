@@ -158,6 +158,7 @@ export class CodexWebClient {
 
   #applyEvent(event: BrowserEvent): void {
     const current = this.getSnapshot();
+    if (event.sequence <= current.sequence) return;
     const payload = isRecord(event.payload) ? event.payload : {};
     if (isSnapshot(payload.snapshot)) {
       this.store.getState().setSnapshot({ ...payload.snapshot, sequence: event.sequence });
@@ -166,6 +167,41 @@ export class CodexWebClient {
     let next: BrowserSnapshot = { ...current, sequence: event.sequence };
     if (event.type === "models.updated" && Array.isArray(payload.models)) {
       next = { ...next, models: payload.models as BrowserSnapshot["models"] };
+    } else if (
+      event.type === "permissionProfiles.updated"
+      && Array.isArray(payload.permissionProfiles)
+    ) {
+      next = {
+        ...next,
+        permissionProfiles: payload.permissionProfiles as NonNullable<BrowserSnapshot["permissionProfiles"]>,
+      };
+    } else if (event.type === "thread.settings.updated") {
+      if (isRecord(payload.threadSettings)) {
+        next = {
+          ...next,
+          threadSettings: payload.threadSettings as unknown as NonNullable<BrowserSnapshot["threadSettings"]>,
+        };
+      } else {
+        delete next.threadSettings;
+      }
+    } else if (event.type === "turn.diff.updated") {
+      if (isRecord(payload.turnDiff)) {
+        next = {
+          ...next,
+          turnDiff: payload.turnDiff as unknown as NonNullable<BrowserSnapshot["turnDiff"]>,
+        };
+      } else {
+        delete next.turnDiff;
+      }
+    } else if (event.type === "review.updated") {
+      if (isRecord(payload.review)) {
+        next = {
+          ...next,
+          review: payload.review as unknown as NonNullable<BrowserSnapshot["review"]>,
+        };
+      } else {
+        delete next.review;
+      }
     } else if (event.type === "threads.updated" && Array.isArray(payload.threads)) {
       next = { ...next, threads: payload.threads as BrowserSnapshot["threads"] };
     } else if (event.type === "thread.updated" && isRecord(payload.thread)) {
@@ -180,6 +216,9 @@ export class CodexWebClient {
         ? (payload.items as BrowserSnapshot["visibleItems"])
         : [];
       next = { ...next, ...(threadId ? { loadedThreadId: threadId } : {}), visibleItems: items };
+      delete next.threadSettings;
+      delete next.turnDiff;
+      delete next.review;
     } else if (event.type === "service.updated" && isRecord(event.payload)) {
       next = { ...next, service: event.payload as unknown as BrowserSnapshot["service"] };
     } else if (event.type === "approval.pending" && isRecord(payload.approval)) {

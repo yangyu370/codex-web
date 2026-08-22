@@ -10,7 +10,14 @@ import type {
   VisibleItem,
 } from "../../shared/protocol";
 import { WEB_PROTOCOL_VERSION } from "../../shared/protocol";
-import { decodeThread, optionalNumber, optionalString, record } from "../app-server/decoders";
+import {
+  decodeHistoryItem,
+  decodeThread,
+  decodeThreadRuntime,
+  optionalNumber,
+  optionalString,
+  record,
+} from "../app-server/decoders";
 import type { JsonRpcNotification, JsonRpcServerRequest } from "../app-server/json-rpc";
 
 const MAX_VISIBLE_ITEMS = 500;
@@ -24,6 +31,7 @@ const MAX_SNAPSHOT_BYTES = 7_340_032;
 const MAX_DIAGNOSTICS = 500;
 const MAX_DIAGNOSTIC_BYTES = 16_384;
 const MAX_APPROVAL_AUDIT = 500;
+const MAX_TURN_DIFF_BYTES = 1_048_576;
 
 export interface ApprovalAuditEntry {
   approvalId: string;
@@ -60,6 +68,7 @@ export class WebState {
   #tokenUsage?: BrowserSnapshot["tokenUsage"];
   #threadSettings?: ThreadSettingsSummary;
   #review?: ReviewState;
+  #turnDiff?: BrowserSnapshot["turnDiff"];
 
   constructor(
     platform: "macos" | "windows",
@@ -85,6 +94,7 @@ export class WebState {
       pendingApprovals: this.#approvals.filter((approval) => approval.status === "pending"),
       ...(this.#threadSettings ? { threadSettings: this.#threadSettings } : {}),
       ...(this.#review ? { review: this.#review } : {}),
+      ...(this.#turnDiff ? { turnDiff: this.#turnDiff } : {}),
       ...(this.#tokenUsage ? { tokenUsage: this.#tokenUsage } : {}),
     });
     while (snapshot.visibleItems.length > 0 && !fits(JSON.stringify(snapshot), MAX_SNAPSHOT_BYTES)) {
@@ -148,6 +158,7 @@ export class WebState {
     if (this.#loadedThreadId !== threadId) {
       this.#threadSettings = undefined;
       this.#review = undefined;
+      this.#turnDiff = undefined;
     }
     this.#loadedThreadId = threadId;
     this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
@@ -169,6 +180,12 @@ export class WebState {
           break;
         case "turn/completed":
           this.#applyTurnCompleted(params);
+          break;
+        case "thread/settings/updated":
+          this.#applyThreadSettings(params);
+          break;
+        case "turn/diff/updated":
+          this.#applyTurnDiff(params);
           break;
         case "item/started":
         case "item/completed":
@@ -379,6 +396,34 @@ export class WebState {
       threadId,
       status: normalizeTurnStatus(optionalString(turn.status)),
     };
+    if (this.#review?.threadId === threadId && this.#review.turnId === this.#activeTurn.id) {
+      const terminal = this.#activeTurn.status === "inProgress"
+        ? "completed"
+        : this.#activeTurn.status;
+      this.setReview({ ...this.#review, status: terminal });
+    }
+  }
+
+  #applyThreadSettings(params: Record<string, unknown>): void {
+    const threadId = requiredBoundedString(params, "threadId", 512);
+    if (threadId !== this.#loadedThreadId) return;
+    const settings = decodeThreadRuntime(params.threadSettings, threadId);
+    if (!settings) throw new Error("compatibilityError: threadSettings.model");
+    this.setThreadSettings(settings);
+  }
+
+  #applyTurnDiff(params: Record<string, unknown>): void {
+    const threadId = requiredBoundedString(params, "threadId", 512);
+    if (threadId !== this.#loadedThreadId) return;
+    const turnId = requiredBoundedString(params, "turnId", 512);
+    const diff = boundNewest(requiredString(params, "diff"), MAX_TURN_DIFF_BYTES);
+    this.#turnDiff = {
+      threadId,
+      turnId,
+      diff: diff.value,
+      ...(diff.truncated ? { truncated: true } : {}),
+    };
+    this.#emit("turn.diff.updated", { turnDiff: this.#turnDiff });
   }
 
   #applyItem(params: Record<string, unknown>, completed: boolean): void {
@@ -422,17 +467,29 @@ export class WebState {
           : { exitCode: optionalNumber(item.exitCode) }),
       };
     } else if (type === "fileChange") {
-      const changes = Array.isArray(item.changes) ? item.changes : [];
-      const first = changes.length > 0 ? record(changes[0], "fileChange.changes[0]") : {};
-      const diff = boundNewest(optionalString(first.diff) ?? "", MAX_ITEM_BYTES);
+      const decoded = decodeHistoryItem(item);
+      visible = decoded?.type === "fileChange"
+        ? { ...decoded, status: normalizeItemStatus(optionalString(item.status), completed) }
+        : undefined;
+    } else if (type === "enteredReviewMode" || type === "exitedReviewMode") {
+      const threadId = requiredBoundedString(params, "threadId", 512);
+      const turnId = requiredBoundedString(params, "turnId", 512);
+      const text = boundNewest(optionalString(item.review)
+        ?? (type === "enteredReviewMode" ? "Reviewing changes" : "Review complete"), MAX_ITEM_BYTES);
       visible = {
         id,
-        type: "fileChange",
-        path: boundOldest(optionalString(first.path) ?? "File changes", MAX_METADATA_BYTES),
-        ...(diff.value ? { diff: diff.value } : {}),
-        ...(diff.truncated ? { truncated: true } : {}),
-        status: normalizeItemStatus(optionalString(item.status), completed),
+        type: "status",
+        text: text.value,
+        tone: type === "enteredReviewMode" ? "neutral" : "success",
+        ...(text.truncated ? { truncated: true } : {}),
       };
+      if (threadId === this.#loadedThreadId) {
+        this.setReview({
+          threadId,
+          turnId,
+          status: type === "enteredReviewMode" ? "inProgress" : "completed",
+        });
+      }
     } else if (type === "reasoning" || type === "plan") {
       const summary = Array.isArray(item.summary)
         ? item.summary.filter((value): value is string => typeof value === "string").join("\n")
@@ -491,16 +548,15 @@ export class WebState {
   #applyFileChangePatch(params: Record<string, unknown>): void {
     const itemId = requiredString(params, "itemId");
     const changes = Array.isArray(params.changes) ? params.changes : [];
-    const first = changes.length > 0 ? record(changes[0], "changes[0]") : {};
-    const diff = boundNewest(optionalString(first.diff) ?? "", MAX_ITEM_BYTES);
-    this.#replaceVisibleItem({
+    const decoded = decodeHistoryItem({
       id: itemId,
       type: "fileChange",
-      path: boundOldest(optionalString(first.path) ?? "File changes", MAX_METADATA_BYTES),
-      ...(diff.value ? { diff: diff.value } : {}),
-      ...(diff.truncated ? { truncated: true } : {}),
-      status: "running",
+      status: "inProgress",
+      changes,
     });
+    if (decoded?.type === "fileChange") {
+      this.#replaceVisibleItem({ ...decoded, status: "running" });
+    }
   }
 
   #resolveServerRequest(requestId: unknown): void {

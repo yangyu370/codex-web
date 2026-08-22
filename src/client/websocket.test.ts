@@ -129,4 +129,78 @@ describe("CodexWebClient", () => {
 
     expect(client.getSnapshot().pendingApprovals).toEqual([]);
   });
+
+  test("applies task capability events and lets authoritative snapshots clear them", () => {
+    const socket = new FakeSocket();
+    const client = new CodexWebClient(snapshot, () => socket);
+    client.connect();
+    socket.open();
+    const settings = {
+      threadId: "t1",
+      model: "gpt-5.6",
+      effort: "high",
+      approvalPolicy: "on-request",
+      sandbox: "workspaceWrite",
+    };
+    const turnDiff = { threadId: "t1", turnId: "turn1", diff: "+change" };
+    const review = { threadId: "t1", turnId: "review1", status: "inProgress" };
+    const profiles = [{ id: ":workspace", allowed: true }];
+
+    socket.receive({
+      kind: "event",
+      sequence: 7,
+      type: "thread.settings.updated",
+      payload: { threadSettings: settings },
+    });
+    socket.receive({
+      kind: "event",
+      sequence: 8,
+      type: "turn.diff.updated",
+      payload: { turnDiff },
+    });
+    socket.receive({
+      kind: "event",
+      sequence: 9,
+      type: "review.updated",
+      payload: { review },
+    });
+    socket.receive({
+      kind: "event",
+      sequence: 10,
+      type: "permissionProfiles.updated",
+      payload: { permissionProfiles: profiles },
+    });
+
+    expect(client.getSnapshot()).toMatchObject({
+      sequence: 10,
+      threadSettings: settings,
+      turnDiff,
+      review,
+      permissionProfiles: profiles,
+    });
+
+    socket.receive({ ...snapshot, sequence: 11 });
+    expect(client.getSnapshot()).not.toHaveProperty("threadSettings");
+    expect(client.getSnapshot()).not.toHaveProperty("turnDiff");
+    expect(client.getSnapshot()).not.toHaveProperty("review");
+  });
+
+  test("ignores replayed events at or behind the authoritative sequence", () => {
+    const socket = new FakeSocket();
+    const client = new CodexWebClient({ ...snapshot, sequence: 7 }, () => socket);
+    client.connect();
+    socket.open();
+
+    socket.receive({
+      kind: "event",
+      sequence: 7,
+      type: "review.updated",
+      payload: {
+        review: { threadId: "t1", turnId: "stale", status: "inProgress" },
+      },
+    });
+
+    expect(client.getSnapshot()).not.toHaveProperty("review");
+    expect(client.getSnapshot().sequence).toBe(7);
+  });
 });
