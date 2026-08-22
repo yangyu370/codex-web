@@ -248,6 +248,57 @@ describe("BrowserGateway", () => {
     expect(sent.every((message) => message.kind === "response" && message.error?.code === "invalidRequest")).toBe(true);
   });
 
+  test("interrupts only the authoritative active turn", async () => {
+    const state = new WebState("macos");
+    makeWritable(state, "t1");
+    state.applyNotification({
+      method: "turn/started",
+      params: { threadId: "t1", turn: { id: "turn1", status: "inProgress" } },
+    });
+    const calls: unknown[] = [];
+    const gateway = new BrowserGateway(state, actions({
+      interruptTurn: async (...args) => { calls.push(args); return {}; },
+    }));
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(request("turn.interrupt", { threadId: "t1", turnId: "other" }), (message) => sent.push(message));
+    await gateway.handleMessage(request("turn.interrupt", { threadId: "t1", turnId: "turn1" }), (message) => sent.push(message));
+
+    expect(calls).toEqual([["t1", "turn1"]]);
+    expect(sent[0]).toMatchObject({ kind: "response", error: { code: "invalidRequest" } });
+    expect(sent[1]).toMatchObject({ kind: "response", result: {} });
+  });
+
+  test("single-flights review and rejects review while a turn is active", async () => {
+    const state = new WebState("macos");
+    makeWritable(state, "t1");
+    let release: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const gateway = new BrowserGateway(state, actions({
+      startReview: async () => { calls += 1; await pending; return {}; },
+    }));
+    const sent: ServerMessage[] = [];
+
+    const first = gateway.handleMessage(request("review.start", { threadId: "t1" }), (message) => sent.push(message));
+    await Bun.sleep(0);
+    const second = gateway.handleMessage(request("review.start", { threadId: "t1" }), (message) => sent.push(message));
+    await Bun.sleep(0);
+    const callsBeforeRelease = calls;
+    release();
+    await Promise.all([first, second]);
+
+    expect(callsBeforeRelease).toBe(1);
+    expect(sent.some((message) => message.kind === "response" && message.error?.code === "invalidRequest")).toBe(true);
+
+    state.applyNotification({
+      method: "turn/started",
+      params: { threadId: "t1", turn: { id: "turn1", status: "inProgress" } },
+    });
+    await gateway.handleMessage(request("review.start", { threadId: "t1" }), (message) => sent.push(message));
+    expect(calls).toBe(1);
+  });
+
   test("reports browser connection count changes once per connection", () => {
     const state = new WebState("macos");
     const counts: number[] = [];

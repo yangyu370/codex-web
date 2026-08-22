@@ -574,6 +574,57 @@ describe("WebState", () => {
     expect(state.snapshot().threads).toEqual([expect.objectContaining({ id: "thread-a", canAcceptDirectInput: true }), expect.objectContaining({ id: "thread-b" })]);
   });
 
+  test("retains loaded capability when a catalog entry for the same task omits it", () => {
+    const state = new WebState("macos");
+    state.setThreads([{
+      id: "thread-a",
+      title: "Current",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 2,
+      source: "cli",
+      canAcceptDirectInput: true,
+    }]);
+    state.loadThread("thread-a", []);
+
+    state.setThreads([{
+      id: "thread-a",
+      title: "Current refreshed",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 3,
+    }]);
+
+    expect(state.snapshot().threads[0]).toMatchObject({
+      id: "thread-a",
+      title: "Current refreshed",
+      source: "cli",
+      canAcceptDirectInput: true,
+    });
+  });
+
+  test("clears stale task runtime even when reloading the same thread", () => {
+    const state = new WebState("macos");
+    state.loadThread("thread-a", []);
+    state.setThreadSettings({
+      threadId: "thread-a",
+      model: "gpt-5.6",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    state.setReview({ threadId: "thread-a", turnId: "review-old", status: "inProgress" });
+    state.applyNotification({
+      method: "turn/diff/updated",
+      params: { threadId: "thread-a", turnId: "review-old", diff: "+old" },
+    });
+
+    state.loadThread("thread-a", []);
+
+    expect(state.snapshot()).not.toHaveProperty("threadSettings");
+    expect(state.snapshot()).not.toHaveProperty("review");
+    expect(state.snapshot()).not.toHaveProperty("turnDiff");
+  });
+
   test("applies current file patch and turn error notifications", () => {
     const state = new WebState("macos");
     state.applyNotification({

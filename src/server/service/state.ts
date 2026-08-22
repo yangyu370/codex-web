@@ -145,10 +145,13 @@ export class WebState {
   }
 
   setThreads(threads: ThreadSummary[]): void {
-    const next = threads.slice(0, MAX_CATALOG_ENTRIES).flatMap(boundThread);
+    let next = threads.slice(0, MAX_CATALOG_ENTRIES).flatMap(boundThread);
     const loaded = this.#loadedThreadId
       ? this.#threads.find((thread) => thread.id === this.#loadedThreadId)
       : undefined;
+    if (loaded) {
+      next = next.map((thread) => thread.id === loaded.id ? { ...loaded, ...thread } : thread);
+    }
     this.#threads = loaded && !next.some((thread) => thread.id === loaded.id)
       ? [loaded, ...next].slice(0, MAX_CATALOG_ENTRIES)
       : next;
@@ -165,13 +168,11 @@ export class WebState {
     items: VisibleItem[],
     activeTurn?: BrowserSnapshot["activeTurn"],
   ): void {
-    if (this.#loadedThreadId !== threadId) {
-      this.#threadSettings = undefined;
-      this.#review = undefined;
-      this.#turnDiff = undefined;
-      this.#tokenUsage = undefined;
-      this.interruptApprovals();
-    }
+    this.#threadSettings = undefined;
+    this.#review = undefined;
+    this.#turnDiff = undefined;
+    this.#tokenUsage = undefined;
+    this.interruptApprovals();
     this.#loadedThreadId = threadId;
     this.#activeTurn = activeTurn?.threadId === threadId ? activeTurn : undefined;
     this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);

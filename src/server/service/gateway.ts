@@ -51,6 +51,7 @@ export class BrowserGateway {
   readonly #onConnectionCountChanged?: (count: number) => void;
   readonly #connections = new Set<Send>();
   readonly #events: Array<{ event: BrowserEvent; bytes: number }> = [];
+  readonly #reviewRequests = new Set<string>();
   #eventBytes = 0;
 
   constructor(
@@ -177,14 +178,22 @@ export class BrowserGateway {
       }
       case "review.start": {
         const threadId = requiredBoundedString(request.params, "threadId", 512);
-        this.#requireWritableThread(threadId);
-        return this.#actions.startReview(threadId);
+        return this.#startReview(threadId);
       }
-      case "turn.interrupt":
-        return this.#actions.interruptTurn(
-          requiredString(request.params, "threadId"),
-          requiredString(request.params, "turnId"),
-        );
+      case "turn.interrupt": {
+        const threadId = requiredBoundedString(request.params, "threadId", 512);
+        const turnId = requiredBoundedString(request.params, "turnId", 512);
+        this.#requireWritableThread(threadId);
+        const activeTurn = this.#state.snapshot().activeTurn;
+        if (
+          activeTurn?.threadId !== threadId ||
+          activeTurn.id !== turnId ||
+          activeTurn.status !== "inProgress"
+        ) {
+          throw new Error("invalidRequest: turn is not the active task turn");
+        }
+        return this.#actions.interruptTurn(threadId, turnId);
+      }
       case "approval.resolve":
         this.#actions.resolveApproval(
           requiredString(request.params, "approvalId"),
@@ -198,6 +207,24 @@ export class BrowserGateway {
   #requireWritableThread(threadId: string): void {
     if (!this.#state.canAcceptDirectInput(threadId)) {
       throw new Error("invalidRequest: task is not available for direct input");
+    }
+  }
+
+  async #startReview(threadId: string): Promise<unknown> {
+    this.#requireWritableThread(threadId);
+    const snapshot = this.#state.snapshot();
+    if (
+      snapshot.activeTurn?.status === "inProgress" ||
+      snapshot.review?.status === "inProgress" ||
+      this.#reviewRequests.has(threadId)
+    ) {
+      throw new Error("invalidRequest: task already has active work");
+    }
+    this.#reviewRequests.add(threadId);
+    try {
+      return await this.#actions.startReview(threadId);
+    } finally {
+      this.#reviewRequests.delete(threadId);
     }
   }
 
