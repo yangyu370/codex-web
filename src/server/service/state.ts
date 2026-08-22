@@ -145,7 +145,13 @@ export class WebState {
   }
 
   setThreads(threads: ThreadSummary[]): void {
-    this.#threads = threads.slice(0, MAX_CATALOG_ENTRIES).flatMap(boundThread);
+    const next = threads.slice(0, MAX_CATALOG_ENTRIES).flatMap(boundThread);
+    const loaded = this.#loadedThreadId
+      ? this.#threads.find((thread) => thread.id === this.#loadedThreadId)
+      : undefined;
+    this.#threads = loaded && !next.some((thread) => thread.id === loaded.id)
+      ? [loaded, ...next].slice(0, MAX_CATALOG_ENTRIES)
+      : next;
     this.#emit("threads.updated", { threads: this.#threads });
   }
 
@@ -154,21 +160,36 @@ export class WebState {
     this.#emit("thread.updated", { thread });
   }
 
-  loadThread(threadId: string, items: VisibleItem[]): void {
+  loadThread(
+    threadId: string,
+    items: VisibleItem[],
+    activeTurn?: BrowserSnapshot["activeTurn"],
+  ): void {
     if (this.#loadedThreadId !== threadId) {
       this.#threadSettings = undefined;
       this.#review = undefined;
       this.#turnDiff = undefined;
+      this.#tokenUsage = undefined;
+      this.interruptApprovals();
     }
     this.#loadedThreadId = threadId;
+    this.#activeTurn = activeTurn?.threadId === threadId ? activeTurn : undefined;
     this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
     this.#trimVisibleItems();
-    this.#emit("thread.loaded", { threadId, items: this.#visibleItems });
+    this.#emit("thread.loaded", {
+      threadId,
+      items: this.#visibleItems,
+      ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
+    });
   }
 
   applyNotification(notification: JsonRpcNotification): void {
     try {
       const params = record(notification.params, `${notification.method}.params`);
+      if (isTaskScopedNotification(notification.method)) {
+        const threadId = optionalString(params.threadId);
+        if (!threadId || (this.#loadedThreadId && threadId !== this.#loadedThreadId)) return;
+      }
       let changedThread: ThreadSummary | undefined;
       switch (notification.method) {
         case "thread/started":
@@ -371,6 +392,15 @@ export class WebState {
     return cwd;
   }
 
+  isLoadedThread(threadId: string): boolean {
+    return this.#loadedThreadId === threadId;
+  }
+
+  canAcceptDirectInput(threadId: string): boolean {
+    return this.#loadedThreadId === threadId &&
+      this.#threads.find((thread) => thread.id === threadId)?.canAcceptDirectInput === true;
+  }
+
   #upsertThread(thread: ThreadSummary): void {
     const bounded = boundThread(thread)[0];
     if (!bounded) return;
@@ -380,7 +410,7 @@ export class WebState {
   #applyTurnStarted(params: Record<string, unknown>): void {
     const turn = record(params.turn, "turn/started.turn");
     const threadId = requiredString(params, "threadId");
-    this.#loadedThreadId = threadId;
+    this.#loadedThreadId ??= threadId;
     this.#activeTurn = {
       id: requiredString(turn, "id"),
       threadId,
@@ -618,6 +648,18 @@ function defaultApprovalDecisions(kind: PendingApproval["kind"]): string[] {
   return kind === "permissions"
     ? ["grantTurn", "grantSession", "decline"]
     : ["accept", "acceptForSession", "decline", "cancel"];
+}
+
+function isTaskScopedNotification(method: string): boolean {
+  return method === "turn/started" ||
+    method === "turn/completed" ||
+    method === "thread/settings/updated" ||
+    method === "turn/diff/updated" ||
+    method === "item/started" ||
+    method === "item/completed" ||
+    method.startsWith("item/") ||
+    method === "error" ||
+    method === "thread/tokenUsage/updated";
 }
 
 function requiredString(value: Record<string, unknown>, key: string): string {

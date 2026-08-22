@@ -216,6 +216,11 @@ export class CodexWebClient {
         ? (payload.items as BrowserSnapshot["visibleItems"])
         : [];
       next = { ...next, ...(threadId ? { loadedThreadId: threadId } : {}), visibleItems: items };
+      if (isRecord(payload.activeTurn)) {
+        next.activeTurn = payload.activeTurn as unknown as NonNullable<BrowserSnapshot["activeTurn"]>;
+      } else {
+        delete next.activeTurn;
+      }
       delete next.threadSettings;
       delete next.turnDiff;
       delete next.review;

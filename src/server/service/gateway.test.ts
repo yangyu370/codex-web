@@ -140,6 +140,7 @@ describe("BrowserGateway", () => {
 
   test("passes only an optional opaque attachment session id to turn start", async () => {
     const state = new WebState("macos");
+    makeWritable(state, "t1");
     const calls: unknown[] = [];
     const gateway = new BrowserGateway(state, actions({
       startTurn: async (...args) => { calls.push(args); return { id: "turn1" }; },
@@ -171,6 +172,7 @@ describe("BrowserGateway", () => {
 
   test("dispatches bounded task settings and inline review actions", async () => {
     const state = new WebState("macos");
+    makeWritable(state, "t1");
     const calls: unknown[] = [];
     const gateway = new BrowserGateway(state, actions({
       updateThreadSettings: async (...args) => { calls.push(["settings", ...args]); return {}; },
@@ -196,6 +198,7 @@ describe("BrowserGateway", () => {
 
   test("rejects empty or oversized task setting updates", async () => {
     const state = new WebState("macos");
+    makeWritable(state, "t1");
     const calls: unknown[] = [];
     const gateway = new BrowserGateway(state, actions({
       updateThreadSettings: async (...args) => { calls.push(args); return {}; },
@@ -215,6 +218,34 @@ describe("BrowserGateway", () => {
     expect(sent).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "response", error: expect.objectContaining({ code: "invalidRequest" }) }),
     ]));
+  });
+
+  test("rejects mutations for unloaded or history-only tasks", async () => {
+    const state = new WebState("macos");
+    state.setThreads([{
+      id: "history",
+      title: "Desktop history",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 1,
+      canAcceptDirectInput: false,
+    }]);
+    state.loadThread("history", []);
+    const calls: unknown[] = [];
+    const gateway = new BrowserGateway(state, actions({
+      startTurn: async (...args) => { calls.push(["turn", ...args]); return {}; },
+      updateThreadSettings: async (...args) => { calls.push(["settings", ...args]); return {}; },
+      startReview: async (...args) => { calls.push(["review", ...args]); return {}; },
+    }));
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(request("turn.start", { threadId: "history", text: "Continue" }), (message) => sent.push(message));
+    await gateway.handleMessage(request("thread.settings.update", { threadId: "history", effort: "high" }), (message) => sent.push(message));
+    await gateway.handleMessage(request("review.start", { threadId: "other" }), (message) => sent.push(message));
+
+    expect(calls).toEqual([]);
+    expect(sent).toHaveLength(3);
+    expect(sent.every((message) => message.kind === "response" && message.error?.code === "invalidRequest")).toBe(true);
   });
 
   test("reports browser connection count changes once per connection", () => {
@@ -300,3 +331,15 @@ describe("BrowserGateway", () => {
     expect(state.approvalAudit()[0]?.deviceId).toBe("device-one");
   });
 });
+
+function makeWritable(state: WebState, threadId: string): void {
+  state.setThreads([{
+    id: threadId,
+    title: "Writable task",
+    preview: "",
+    createdAt: 1,
+    updatedAt: 1,
+    canAcceptDirectInput: true,
+  }]);
+  state.loadThread(threadId, []);
+}

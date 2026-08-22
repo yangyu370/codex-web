@@ -1036,7 +1036,7 @@ summary:focus-visible {
 
 .inspector-tabs { border-bottom: 1px solid var(--border); display: grid; flex: 0 0 40px; grid-template-columns: 1fr 1fr; padding: 0 10px; }
 .inspector-tabs button { align-items: center; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--text-faint); display: flex; font-size: 10.5px; gap: 6px; justify-content: center; }
-.inspector-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); }
+.inspector-tabs button[data-active="true"] { border-bottom-color: var(--accent); color: var(--text); }
 .inspector-tabs button span { background: var(--panel-raised); border-radius: 8px; font-size: 8px; min-width: 15px; padding: 1px 4px; }
 
 .changes-state { align-items: center; color: var(--text-faint); display: flex; flex: 1; flex-direction: column; justify-content: center; padding: 30px; text-align: center; }

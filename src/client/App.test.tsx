@@ -186,4 +186,31 @@ describe("Codex web shell", () => {
       "The installed Codex version is not compatible.",
     );
   });
+
+  test("keeps history-only tasks read-only", () => {
+    render(<App initialSnapshot={{
+      ...emptySnapshot,
+      loadedThreadId: "desktop-1",
+      threads: [{
+        id: "desktop-1",
+        title: "Desktop history",
+        preview: "Read only",
+        createdAt: 1,
+        updatedAt: 2,
+        canAcceptDirectInput: false,
+        source: "appServer",
+      }],
+      threadSettings: {
+        threadId: "desktop-1",
+        model: "gpt-5.6",
+        effort: "medium",
+        approvalPolicy: "on-request",
+        sandbox: "read-only",
+      },
+    }} />);
+
+    expect((screen.getByRole("textbox", { name: "Message Codex" }) as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByRole("combobox", { name: "Reasoning effort" }) as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Review changes" }) as HTMLButtonElement).title).toBe("This task is available as history only");
+  });
 });

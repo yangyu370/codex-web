@@ -110,6 +110,7 @@ export function App({
   const effectiveModel = loadedSettings?.model ?? model;
   const effectiveEffort = loadedSettings?.effort ?? effort;
   const effectivePermissionProfile = loadedSettings?.permissionProfile?.id ?? permissionProfile;
+  const historyOnly = Boolean(visibleSnapshot.loadedThreadId) && thread?.canAcceptDirectInput !== true;
 
   useEffect(() => {
     if (!client) return undefined;
@@ -436,7 +437,7 @@ export function App({
 
   const reviewRunning = visibleSnapshot.review?.status === "inProgress";
   const reviewEnabled = Boolean(visibleSnapshot.loadedThreadId) &&
-    visibleSnapshot.service.status === "ready" && !running && thread?.canAcceptDirectInput !== false;
+    visibleSnapshot.service.status === "ready" && !running && thread?.canAcceptDirectInput === true;
   const reviewDisabledReason = reviewRunning
     ? "Review is already running"
     : !visibleSnapshot.loadedThreadId
@@ -445,7 +446,7 @@ export function App({
         ? "Codex is not ready"
         : running
           ? "Wait for the active turn to finish"
-          : thread?.canAcceptDirectInput === false
+          : thread?.canAcceptDirectInput !== true
             ? "This task is available as history only"
             : undefined;
 
@@ -473,7 +474,7 @@ export function App({
           service={visibleSnapshot.service}
           threadTitle={thread?.title}
           controls={<TaskSettings
-            disabled={visibleSnapshot.service.status !== "ready"}
+            disabled={visibleSnapshot.service.status !== "ready" || historyOnly}
             effort={effectiveEffort}
             model={effectiveModel}
             models={visibleSnapshot.models}
@@ -508,7 +509,7 @@ export function App({
           }} />
           <Composer
             cwd={cwd}
-            disabled={visibleSnapshot.service.status !== "ready"}
+            disabled={visibleSnapshot.service.status !== "ready" || historyOnly}
             model={model}
             models={visibleSnapshot.models}
             showModel={!visibleSnapshot.loadedThreadId}

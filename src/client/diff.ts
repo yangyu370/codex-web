@@ -46,6 +46,7 @@ export function parseUnifiedDiff(source: string): ParsedDiff {
   let hunk: ParsedDiffHunk | undefined;
   let oldLine = 0;
   let newLine = 0;
+  let malformed = false;
 
   for (const line of source.split("\n")) {
     if (line.startsWith("diff --git ")) {
@@ -92,6 +93,7 @@ export function parseUnifiedDiff(source: string): ParsedDiff {
     if (line.startsWith("@@")) {
       const match = HUNK_HEADER.exec(line);
       if (!match) {
+        malformed = true;
         hunk = undefined;
         continue;
       }
@@ -127,6 +129,9 @@ export function parseUnifiedDiff(source: string): ParsedDiff {
     }
   }
 
+  if (malformed || files.some((entry) => entry.hunks.length === 0)) {
+    return { files: [], raw: source, parsed: false };
+  }
   const parsedFiles = files
     .filter((entry) => entry.hunks.length > 0)
     .map((entry): ParsedDiffFile => ({

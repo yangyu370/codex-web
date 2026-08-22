@@ -96,6 +96,24 @@ describe("connectUnixWebSocket", () => {
     await Bun.sleep(5);
     expect(reasons).toHaveLength(1);
   });
+
+  test("times out a socket that never completes the HTTP upgrade", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "codex-web-ws-timeout-"));
+    const socketPath = path.join(directory, "app-server.sock");
+    const server = createServer();
+    server.on("upgrade", (_request, socket) => {
+      cleanups.push(async () => { socket.destroy(); });
+    });
+    await listen(server, socketPath);
+    cleanups.push(async () => {
+      server.closeAllConnections();
+      server.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    await expect(connectUnixWebSocket(socketPath, { handshakeTimeoutMs: 5 }))
+      .rejects.toThrow("WebSocket upgrade timed out");
+  });
 });
 
 async function unixWebSocketServer(): Promise<{

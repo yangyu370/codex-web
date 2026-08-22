@@ -203,4 +203,31 @@ describe("CodexWebClient", () => {
     expect(client.getSnapshot()).not.toHaveProperty("review");
     expect(client.getSnapshot().sequence).toBe(7);
   });
+
+  test("restores or clears authoritative active work when a thread is reloaded", () => {
+    const socket = new FakeSocket();
+    const client = new CodexWebClient(snapshot, () => socket);
+    client.connect();
+    socket.open();
+
+    socket.receive({
+      kind: "event",
+      sequence: 12,
+      type: "thread.loaded",
+      payload: {
+        threadId: "t1",
+        items: [],
+        activeTurn: { id: "turn1", threadId: "t1", status: "inProgress" },
+      },
+    });
+    expect(client.getSnapshot().activeTurn).toEqual({ id: "turn1", threadId: "t1", status: "inProgress" });
+
+    socket.receive({
+      kind: "event",
+      sequence: 13,
+      type: "thread.loaded",
+      payload: { threadId: "t1", items: [] },
+    });
+    expect(client.getSnapshot()).not.toHaveProperty("activeTurn");
+  });
 });

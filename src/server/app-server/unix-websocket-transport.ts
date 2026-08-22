@@ -5,11 +5,13 @@ import path from "node:path";
 import type { JsonRpcTransport } from "./json-rpc";
 
 const DEFAULT_MAX_PAYLOAD_BYTES = 8_388_608;
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
 const MAX_UPGRADE_BYTES = 16_384;
 const WEB_SOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 export interface UnixWebSocketTransportOptions {
   maxPayloadBytes?: number;
+  handshakeTimeoutMs?: number;
 }
 
 export function connectUnixWebSocket(
@@ -24,10 +26,20 @@ export function connectUnixWebSocket(
     const key = randomBytes(16).toString("base64");
     let upgradeBuffer = Buffer.alloc(0);
     let settled = false;
+    const handshakeTimeoutMs = Math.max(1, Math.min(
+      options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS,
+      60_000,
+    ));
+    const timeout = setTimeout(
+      () => failUpgrade(new Error("WebSocket upgrade timed out")),
+      handshakeTimeoutMs,
+    );
+    timeout.unref();
 
     const failUpgrade = (error: Error): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       socket.destroy();
       reject(error);
     };
@@ -71,6 +83,7 @@ export function connectUnixWebSocket(
         return;
       }
       settled = true;
+      clearTimeout(timeout);
       socket.off("error", failUpgrade);
       socket.off("data", handleUpgrade);
       const transport = createWebSocketTransport(

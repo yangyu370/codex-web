@@ -2,7 +2,7 @@ import path from "node:path";
 import { MAX_BROWSER_MESSAGE_BYTES } from "../shared/protocol";
 
 import { CodexAdapter } from "./app-server/adapter";
-import { AppServerProcessManager } from "./app-server/process-manager";
+import { AppServerProcessManager, shouldInterruptOnWebShutdown } from "./app-server/process-manager";
 import { parseAuthConfig } from "./auth/config";
 import { selectHostPlatform } from "./platform";
 import { createSystemRuntime } from "./platform/system-runtime";
@@ -23,6 +23,7 @@ const localLog = new LocalEventLog(platform.dataDirectory(), secretEnvironmentVa
 const state = new WebState(platform.kind, (type, payload) => localLog.append(type, payload));
 const manager = new AppServerProcessManager(platform, {
   configuredExecutable: process.env.CODEX_WEB_CODEX_EXECUTABLE,
+  env: environmentStrings(process.env),
 });
 let adapter: CodexAdapter | undefined;
 const directories = new DirectoryService(
@@ -175,7 +176,11 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   server.stop(false);
   const activeTurn = state.snapshot().activeTurn;
-  if (adapter && activeTurn?.status === "inProgress") {
+  if (
+    shouldInterruptOnWebShutdown(manager.snapshot()) &&
+    adapter &&
+    activeTurn?.status === "inProgress"
+  ) {
     await Promise.race([
       adapter.interruptTurn(activeTurn.threadId, activeTurn.id),
       Bun.sleep(1_500),
@@ -209,4 +214,10 @@ function parsePort(value: string | undefined): number {
     throw new Error("CODEX_WEB_PORT must be an integer between 1 and 65535");
   }
   return port;
+}
+
+function environmentStrings(environment: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
 }

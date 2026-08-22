@@ -5,6 +5,7 @@ import {
 } from "./json-rpc";
 import type { WebState } from "../service/state";
 import type { ValidatedPath } from "../platform";
+import type { BrowserSnapshot } from "../../shared/protocol";
 import {
   decodeModelList,
   decodePermissionProfileList,
@@ -50,6 +51,9 @@ export class CodexAdapter {
     rpc.onProtocolError?.((error) => state.addDiagnostic(error.message));
     rpc.onServerRequest((request) => {
       try {
+        const params = record(request.params, `${request.method}.params`);
+        const threadId = optionalString(params.threadId);
+        if (threadId && !state.isLoadedThread(threadId)) return;
         state.addApproval(request);
       } catch (error) {
         rpc.respondError?.(request.id, {
@@ -127,12 +131,14 @@ export class CodexAdapter {
       const rawThread = record(response.thread, "thread/resume response.thread");
       const decoded = decodeThreadEnvelope({ thread: rawThread });
       let items: ReturnType<typeof decodeTurns> = [];
+      let activeTurn: BrowserSnapshot["activeTurn"];
       let pageValue: unknown = response.initialTurnsPage;
       let pages = 0;
       const seenCursors = new Set<string>();
       while (pageValue !== undefined && pageValue !== null && pages < 50) {
         const page = record(pageValue, "thread/turns/list response");
         const turns = Array.isArray(page.data) ? page.data : [];
+        activeTurn ??= activeTurnFrom(turns, decoded.thread.id);
         const pageItems = decodeTurns([...turns].reverse());
         items = [...pageItems, ...items].slice(-500);
         const cursor = optionalString(page.nextCursor);
@@ -148,7 +154,7 @@ export class CodexAdapter {
         pages += 1;
       }
       this.#state.upsertThread(decoded.thread);
-      this.#state.loadThread(decoded.thread.id, items);
+      this.#state.loadThread(decoded.thread.id, items, activeTurn);
       const runtime = decodeThreadEnvelope(response).settings;
       if (runtime) this.#state.setThreadSettings(runtime);
       return decoded.thread;
@@ -283,9 +289,13 @@ export class CodexAdapter {
     method: "thread/resume" | "thread/read",
     params: Record<string, unknown>,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
-    const decoded = decodeThreadEnvelope(await this.#request(method, params));
+    const response = await this.#request(method, params);
+    const decoded = decodeThreadEnvelope(response);
+    const rawResponse = record(response, `${method} response`);
+    const rawThread = record(rawResponse.thread, `${method} response.thread`);
+    const turns = Array.isArray(rawThread.turns) ? rawThread.turns : [];
     this.#state.upsertThread(decoded.thread);
-    this.#state.loadThread(decoded.thread.id, decoded.items);
+    this.#state.loadThread(decoded.thread.id, decoded.items, activeTurnFrom(turns, decoded.thread.id));
     if (decoded.settings) this.#state.setThreadSettings(decoded.settings);
     return decoded.thread;
   }
@@ -319,4 +329,21 @@ export class CodexAdapter {
       throw new Error(`codexRejected: ${method}`);
     }
   }
+}
+
+function activeTurnFrom(
+  turns: unknown[],
+  threadId: string,
+): BrowserSnapshot["activeTurn"] {
+  for (const value of turns) {
+    try {
+      const turn = record(value, "thread.turn");
+      const id = optionalString(turn.id);
+      const status = optionalString(turn.status);
+      if (id && id.length <= 512 && status === "inProgress") {
+        return { id, threadId, status: "inProgress" };
+      }
+    } catch {}
+  }
+  return undefined;
 }

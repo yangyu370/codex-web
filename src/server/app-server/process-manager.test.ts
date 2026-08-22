@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { AppServerProcess, HostPlatform } from "../platform";
 import type { JsonRpcTransport } from "./json-rpc";
-import { AppServerProcessManager } from "./process-manager";
+import { AppServerProcessManager, shouldInterruptOnWebShutdown } from "./process-manager";
 
 class MemoryTransport implements JsonRpcTransport {
   readonly outbound: string[] = [];
@@ -102,6 +102,11 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("AppServerProcessManager", () => {
+  test("disconnects from shared daemon turns without interrupting them", () => {
+    expect(shouldInterruptOnWebShutdown({ status: "ready", mode: "daemon" })).toBe(false);
+    expect(shouldInterruptOnWebShutdown({ status: "ready", mode: "embedded" })).toBe(true);
+  });
+
   test("reports executable discovery failures as unavailable", async () => {
     const platform = fakePlatform([]);
     platform.resolveCodexExecutable = async () => {
@@ -125,6 +130,7 @@ describe("AppServerProcessManager", () => {
     const manager = new AppServerProcessManager(
       fakePlatform([], (child) => terminated.push(child.pid), "macos"),
       {
+        env: { CODEX_HOME: "/custom/codex-home" },
         version: async () => "codex-cli 1.2.3",
         daemonStart: async (_executable, codexHome) => {
           lifecycleCalls.push(codexHome);
@@ -142,7 +148,7 @@ describe("AppServerProcessManager", () => {
     transport.receive({ jsonrpc: "2.0", id: 1, result: {} });
     await starting;
 
-    expect(lifecycleCalls).toEqual(["/work/.codex"]);
+    expect(lifecycleCalls).toEqual(["/custom/codex-home"]);
     expect(manager.snapshot()).toMatchObject({
       status: "ready",
       mode: "daemon",

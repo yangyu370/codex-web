@@ -99,4 +99,22 @@ describe("parseUnifiedDiff", () => {
   ])("returns a raw fallback for %s", (_label, source) => {
     expect(parseUnifiedDiff(source)).toEqual({ files: [], raw: source, parsed: false });
   });
+
+  test("falls back to raw when one file in a multi-file diff is malformed", () => {
+    const source = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1 +1 @@",
+      "-old",
+      "+new",
+      "diff --git a/b.ts b/b.ts",
+      "--- a/b.ts",
+      "+++ b/b.ts",
+      "@@ malformed @@",
+      "+hidden",
+    ].join("\n");
+
+    expect(parseUnifiedDiff(source)).toEqual({ files: [], raw: source, parsed: false });
+  });
 });

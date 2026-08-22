@@ -137,6 +137,8 @@ export class BrowserGateway {
           throw new Error("invalidRequest: text is required");
         }
         {
+          const threadId = requiredBoundedString(request.params, "threadId", 512);
+          this.#requireWritableThread(threadId);
           const model = optionalBoundedString(request.params, "model", 512);
           const effort = optionalBoundedString(request.params, "effort", 512);
           const permissionProfile = optionalBoundedString(
@@ -150,7 +152,7 @@ export class BrowserGateway {
             ...(permissionProfile ? { permissionProfile } : {}),
           };
           return this.#actions.startTurn(
-          requiredBoundedString(request.params, "threadId", 512),
+          threadId,
           request.params.text,
           optionalString(request.params.attachmentSessionId),
           Object.keys(settings).length > 0 ? settings : undefined,
@@ -158,6 +160,7 @@ export class BrowserGateway {
         }
       case "thread.settings.update": {
         const threadId = requiredBoundedString(request.params, "threadId", 512);
+        this.#requireWritableThread(threadId);
         const effort = optionalBoundedString(request.params, "effort", 512);
         const permissionProfile = optionalBoundedString(
           request.params,
@@ -172,10 +175,11 @@ export class BrowserGateway {
           ...(permissionProfile ? { permissionProfile } : {}),
         });
       }
-      case "review.start":
-        return this.#actions.startReview(
-          requiredBoundedString(request.params, "threadId", 512),
-        );
+      case "review.start": {
+        const threadId = requiredBoundedString(request.params, "threadId", 512);
+        this.#requireWritableThread(threadId);
+        return this.#actions.startReview(threadId);
+      }
       case "turn.interrupt":
         return this.#actions.interruptTurn(
           requiredString(request.params, "threadId"),
@@ -188,6 +192,12 @@ export class BrowserGateway {
           deviceId,
         );
         return {};
+    }
+  }
+
+  #requireWritableThread(threadId: string): void {
+    if (!this.#state.canAcceptDirectInput(threadId)) {
+      throw new Error("invalidRequest: task is not available for direct input");
     }
   }
 

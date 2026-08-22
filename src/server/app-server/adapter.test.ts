@@ -514,6 +514,66 @@ describe("WebState", () => {
     expect(state.snapshot()).not.toHaveProperty("review");
   });
 
+  test("ignores task-scoped notifications from a thread that is not loaded", () => {
+    const state = new WebState("macos");
+    state.loadThread("thread-b", [{ id: "b1", type: "message", role: "user", text: "B" }]);
+
+    state.applyNotification({
+      method: "turn/started",
+      params: { threadId: "thread-a", turn: { id: "turn-a", status: "inProgress" } },
+    });
+    state.applyNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-a",
+        turnId: "turn-a",
+        item: { id: "a1", type: "agentMessage", text: "A", status: "completed" },
+      },
+    });
+
+    expect(state.snapshot()).toMatchObject({
+      loadedThreadId: "thread-b",
+      visibleItems: [{ id: "b1", text: "B" }],
+    });
+    expect(state.snapshot()).not.toHaveProperty("activeTurn");
+  });
+
+  test("atomically restores an active turn while loading resumed history", () => {
+    const state = new WebState("macos");
+    state.loadThread("thread-a", [], { id: "turn-a", threadId: "thread-a", status: "inProgress" });
+
+    expect(state.snapshot().activeTurn).toEqual({
+      id: "turn-a",
+      threadId: "thread-a",
+      status: "inProgress",
+    });
+  });
+
+  test("keeps the loaded task capability when a catalog page omits it", () => {
+    const state = new WebState("macos");
+    const loaded = {
+      id: "thread-a",
+      title: "Current",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 2,
+      canAcceptDirectInput: true,
+    };
+    state.setThreads([loaded]);
+    state.loadThread("thread-a", []);
+
+    state.setThreads([{
+      id: "thread-b",
+      title: "History",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 1,
+      canAcceptDirectInput: false,
+    }]);
+
+    expect(state.snapshot().threads).toEqual([expect.objectContaining({ id: "thread-a", canAcceptDirectInput: true }), expect.objectContaining({ id: "thread-b" })]);
+  });
+
   test("applies current file patch and turn error notifications", () => {
     const state = new WebState("macos");
     state.applyNotification({
@@ -734,6 +794,7 @@ describe("CodexAdapter", () => {
   test("responds to the original JSON-RPC id after atomically resolving approval", () => {
     const rpc = new ExpectedRpcClient("unused", {});
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     const adapter = new CodexAdapter(rpc, state);
     rpc.emitServerRequest({
       id: 9,
@@ -745,6 +806,22 @@ describe("CodexAdapter", () => {
 
     adapter.resolveApproval(approval.id, "accept");
     expect(rpc.responses).toEqual([{ id: 9, result: { decision: "accept" } }]);
+  });
+
+  test("leaves approval requests for unloaded shared-daemon threads unclaimed", () => {
+    const rpc = new ExpectedRpcClient("unused", {});
+    const state = new WebState("macos");
+    state.loadThread("t2", []);
+    new CodexAdapter(rpc, state);
+
+    rpc.emitServerRequest({
+      id: 10,
+      method: "item/fileChange/requestApproval",
+      params: { threadId: "t1", turnId: "turn1", itemId: "patch1" },
+    });
+
+    expect(state.snapshot().pendingApprovals).toEqual([]);
+    expect(rpc.responses).toEqual([]);
   });
 
   test("validates a native directory before starting a thread", async () => {
@@ -795,7 +872,7 @@ describe("CodexAdapter", () => {
           data: [
             {
               id: "turn1",
-              status: "completed",
+              status: "inProgress",
               items: [
                 {
                   type: "agentMessage",
@@ -827,6 +904,11 @@ describe("CodexAdapter", () => {
         streaming: false,
       },
     ]);
+    expect(state.snapshot().activeTurn).toEqual({
+      id: "turn1",
+      threadId: "t1",
+      status: "inProgress",
+    });
   });
 
   test("reads durable thread history with includeTurns enabled", async () => {

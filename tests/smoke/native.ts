@@ -16,9 +16,12 @@ if (process.env.CODEX_WEB_SMOKE !== "1") {
 
 const directory = await mkdtemp(path.join(tmpdir(), "codex-web-smoke-"));
 const platform = selectHostPlatform(process.platform, createSystemRuntime());
+const nativeEnvironment = environmentStrings(process.env);
 const manager = new AppServerProcessManager(platform, {
   configuredExecutable: process.env.CODEX_WEB_CODEX_EXECUTABLE,
+  env: nativeEnvironment,
 });
+let observer: AppServerProcessManager | undefined;
 try {
   const peer = await manager.start();
   const adapter = new CodexAdapter(peer, new WebState(platform.kind), platform);
@@ -40,12 +43,32 @@ try {
     await peer.request("thread/read", { threadId: thread.id, includeTurns: false }),
   );
   if (read.thread.id !== thread.id) throw new Error("Native smoke read the wrong thread");
+  if (platform.kind === "macos") {
+    observer = new AppServerProcessManager(platform, {
+      configuredExecutable: process.env.CODEX_WEB_CODEX_EXECUTABLE,
+      env: nativeEnvironment,
+    });
+    const observerPeer = await observer.start();
+    if (manager.snapshot().mode !== "daemon" || observer.snapshot().mode !== "daemon") {
+      throw new Error("macOS smoke did not establish two shared daemon clients");
+    }
+    const observerAdapter = new CodexAdapter(observerPeer, new WebState("macos"), platform);
+    const resumed = await observerAdapter.resumeThread(thread.id);
+    if (resumed.id !== thread.id) throw new Error("Shared daemon observer resumed the wrong thread");
+  }
   await peer.request("thread/archive", { threadId: thread.id }).catch(() => undefined);
   console.log(
     `Native ${platform.kind} smoke passed with ${models.length} model(s), ` +
     `${profiles.length} permission profile(s), using ${manager.snapshot().codexVersion}.`,
   );
 } finally {
+  await observer?.stop();
   await manager.stop();
   await rm(directory, { recursive: true, force: true });
+}
+
+function environmentStrings(environment: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(environment).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
 }

@@ -91,6 +91,8 @@ async function handle(message: Record<string, unknown>): Promise<void> {
         updatedAt: 1,
         cwd: params.cwd,
         status: { type: "idle" },
+        source: "appServer",
+        canAcceptDirectInput: true,
         turns: [],
       },
       model: String(params.model ?? "gpt-fake"),

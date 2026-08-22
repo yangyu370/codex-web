@@ -36,6 +36,10 @@ export interface AppServerProcessManagerOptions {
   daemonConnect?: (socketPath: string) => Promise<JsonRpcTransport>;
 }
 
+export function shouldInterruptOnWebShutdown(snapshot: AppServerProcessSnapshot): boolean {
+  return snapshot.mode !== "daemon";
+}
+
 export class AppServerProcessManager {
   readonly #platform: HostPlatform;
   readonly #options: AppServerProcessManagerOptions;

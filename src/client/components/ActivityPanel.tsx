@@ -36,11 +36,11 @@ export function ActivityPanel({
   const activities = items.filter(isActivityItem);
   return (
     <aside aria-label={activeTab === "activity" ? "Activity" : "Changes"} className="activity-panel">
-      <div className="inspector-tabs" role="tablist" aria-label="Inspector">
-        <button aria-selected={activeTab === "activity"} onClick={() => onTabChange?.("activity")} role="tab" type="button">
+      <div className="inspector-tabs" aria-label="Inspector sections">
+        <button aria-pressed={activeTab === "activity"} data-active={activeTab === "activity"} onClick={() => onTabChange?.("activity")} type="button">
           Activity {approvals.length ? <span>{approvals.length}</span> : null}
         </button>
-        <button aria-selected={activeTab === "changes"} onClick={() => onTabChange?.("changes")} role="tab" type="button">
+        <button aria-pressed={activeTab === "changes"} data-active={activeTab === "changes"} onClick={() => onTabChange?.("changes")} type="button">
           Changes
         </button>
       </div>

@@ -99,4 +99,21 @@ describe("TaskSettings", () => {
     expect((review as HTMLButtonElement).disabled).toBe(true);
     expect(review.getAttribute("title")).toBe("Wait for the active turn to finish");
   });
+
+  test("preserves an authoritative reasoning effort not yet present in model metadata", () => {
+    render(
+      <TaskSettings
+        effort="ultra"
+        model="gpt-5.6"
+        models={models}
+        onReview={() => undefined}
+        onSettingsChange={() => undefined}
+        permissionProfiles={profiles}
+      />,
+    );
+
+    const effort = screen.getByRole("combobox", { name: "Reasoning effort" }) as HTMLSelectElement;
+    expect(effort.value).toBe("ultra");
+    expect(screen.getByRole("option", { name: "ultra · Current task value" })).not.toBeNull();
+  });
 });

@@ -43,7 +43,10 @@ export function TaskSettings({
   onReview,
 }: TaskSettingsProps) {
   const selectedModel = models.find((entry) => entry.id === model) ?? models[0];
-  const efforts = selectedModel?.supportedReasoningEfforts ?? [];
+  const catalogEfforts = selectedModel?.supportedReasoningEfforts ?? [];
+  const efforts = effort && !catalogEfforts.some((entry) => entry.id === effort)
+    ? [...catalogEfforts, { id: effort, description: "Current task value" }]
+    : catalogEfforts;
   const selectedEffort = efforts.some((entry) => entry.id === effort)
     ? effort
     : selectedModel?.defaultReasoningEffort ?? efforts[0]?.id ?? "";
