@@ -1,6 +1,6 @@
 import { MessageSquareCode, PanelLeftClose, Plus, Search } from "lucide-react";
 
-import type { ThreadSummary } from "../../shared/protocol";
+import type { BrowserSnapshot, ThreadSummary } from "../../shared/protocol";
 import type { ConnectionStatus } from "../websocket";
 
 interface ThreadSidebarProps {
@@ -11,6 +11,7 @@ interface ThreadSidebarProps {
   onNewTask: () => void;
   onSelect: (threadId: string) => void;
   connection: ConnectionStatus;
+  service: BrowserSnapshot["service"];
 }
 
 export function ThreadSidebar({
@@ -21,11 +22,12 @@ export function ThreadSidebar({
   onNewTask,
   onSelect,
   connection,
+  service,
 }: ThreadSidebarProps) {
   const normalized = query.trim().toLowerCase();
   const filtered = normalized
     ? threads.filter((thread) =>
-        `${thread.title} ${thread.preview} ${thread.cwd ?? ""}`
+        `${thread.title} ${thread.preview} ${thread.cwd ?? ""} ${thread.source ?? ""} ${thread.status ?? ""}`
           .toLowerCase()
           .includes(normalized),
       )
@@ -55,29 +57,19 @@ export function ThreadSidebar({
           value={query}
         />
       </label>
-      <div className="sidebar-section-label">
-        <span>Tasks</span>
-        <span>{filtered.length}</span>
-      </div>
       <div className="thread-list">
         {filtered.length === 0 ? (
           <p className="thread-list__empty">No tasks yet</p>
         ) : (
-          filtered.map((thread) => (
-            <button
-              className="thread-row"
-              data-active={thread.id === selectedId}
-              key={thread.id}
-              onClick={() => onSelect(thread.id)}
-              type="button"
-            >
-              <span className="thread-row__title">{thread.title}</span>
-              <span className="thread-row__preview">{thread.preview || thread.cwd}</span>
-              <span className="thread-row__time">{relativeTime(thread.updatedAt)}</span>
-            </button>
-          ))
+          <>
+            <ThreadGroup label="Running" threads={filtered.filter((thread) => isLive(thread, service))} selectedId={selectedId} onSelect={onSelect} live />
+            <ThreadGroup label="Recent" threads={filtered.filter((thread) => !isLive(thread, service))} selectedId={selectedId} onSelect={onSelect} />
+          </>
         )}
       </div>
+      {service.platform === "macos" && (service.liveHandoff !== "available" || !filtered.some((thread) => isLive(thread, service))) ? (
+        <p className="handoff-hint">Start Web before CLI to make new CLI tasks available for live takeover.</p>
+      ) : null}
       <div className="sidebar-footer">
         <span className="user-avatar">Y</span>
         <span className="sidebar-footer__account">
@@ -91,6 +83,29 @@ export function ThreadSidebar({
       </div>
     </nav>
   );
+}
+
+function ThreadGroup({ label, threads, selectedId, onSelect, live = false }: {
+  label: string;
+  threads: ThreadSummary[];
+  selectedId?: string;
+  onSelect: (threadId: string) => void;
+  live?: boolean;
+}) {
+  if (threads.length === 0 && label === "Running") return null;
+  return <section className="thread-group" aria-label={label}>
+    <div className="sidebar-section-label"><span>{label}</span><span>{threads.length}</span></div>
+    {threads.map((thread) => <button className="thread-row" data-active={thread.id === selectedId} key={thread.id} onClick={() => onSelect(thread.id)} type="button">
+      <span className="thread-row__title">{thread.title}{live ? <em>LIVE · CLI</em> : null}</span>
+      <span className="thread-row__preview">{thread.preview || thread.cwd}</span>
+      <span className="thread-row__time">{relativeTime(thread.updatedAt)}</span>
+    </button>)}
+  </section>;
+}
+
+function isLive(thread: ThreadSummary, service: BrowserSnapshot["service"]): boolean {
+  return service.liveHandoff === "available" && thread.source === "cli" &&
+    thread.canAcceptDirectInput === true && thread.status !== "notLoaded" && thread.status !== "systemError";
 }
 
 function relativeTime(timestampSeconds: number): string {

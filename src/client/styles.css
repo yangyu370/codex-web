@@ -313,8 +313,14 @@ summary:focus-visible {
 }
 
 .app-header {
-  align-items: center;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+}
+
+.app-header__bar {
+  align-items: center;
   display: flex;
   height: 47px;
   justify-content: space-between;
@@ -408,6 +414,26 @@ summary:focus-visible {
   min-width: 0;
   position: relative;
 }
+
+.task-settings {
+  align-items: flex-end;
+  background: color-mix(in srgb, var(--panel) 62%, var(--bg));
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  display: flex;
+  gap: 10px;
+  min-height: 54px;
+  padding: 7px 16px 8px 18px;
+}
+
+.task-settings__controls { display: flex; flex: 1; gap: 8px; min-width: 0; }
+.task-setting { display: flex; flex: 1 1 120px; flex-direction: column; gap: 3px; max-width: 210px; min-width: 0; }
+.task-setting > span { align-items: center; color: var(--text-faint); display: flex; font-size: 8.5px; font-weight: 680; gap: 4px; letter-spacing: .06em; text-transform: uppercase; }
+.task-setting em { color: var(--warning); font-size: 7.5px; font-style: normal; letter-spacing: .02em; margin-left: auto; }
+.task-setting select { background: var(--input); border: 1px solid var(--border); border-radius: 6px; font-size: 10.5px; height: 27px; min-width: 0; padding: 0 22px 0 7px; text-overflow: ellipsis; width: 100%; }
+.task-setting[data-pending="true"] select { border-color: var(--warning); opacity: .72; }
+.task-setting select:disabled { color: var(--text-faint); cursor: not-allowed; opacity: .7; }
+.review-button { align-items: center; background: var(--accent); border: 0; border-radius: 6px; color: var(--accent-ink); display: flex; font-size: 10.5px; font-weight: 700; gap: 6px; height: 28px; padding: 0 10px; white-space: nowrap; }
+.review-button:disabled { background: var(--panel-raised); color: var(--text-faint); cursor: not-allowed; }
 
 .conversation-empty,
 .conversation-list {
@@ -1008,6 +1034,50 @@ summary:focus-visible {
   min-width: 0;
 }
 
+.inspector-tabs { border-bottom: 1px solid var(--border); display: grid; flex: 0 0 40px; grid-template-columns: 1fr 1fr; padding: 0 10px; }
+.inspector-tabs button { align-items: center; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--text-faint); display: flex; font-size: 10.5px; gap: 6px; justify-content: center; }
+.inspector-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--text); }
+.inspector-tabs button span { background: var(--panel-raised); border-radius: 8px; font-size: 8px; min-width: 15px; padding: 1px 4px; }
+
+.changes-state { align-items: center; color: var(--text-faint); display: flex; flex: 1; flex-direction: column; justify-content: center; padding: 30px; text-align: center; }
+.changes-state strong { color: var(--text-muted); font-size: 11px; margin-top: 9px; }
+.changes-state p { font-size: 9.5px; max-width: 210px; }
+.changes-raw { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 10px; }
+.changes-raw__label { color: var(--text-faint); font-size: 9px; letter-spacing: .08em; padding: 3px 2px 8px; text-transform: uppercase; }
+.changes-raw pre { background: var(--sidebar); border: 1px solid var(--border); border-radius: 6px; flex: 1; font-size: 10px; margin: 0; overflow: auto; padding: 10px; white-space: pre; }
+.changes-viewer { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
+.changes-warning { align-items: center; background: color-mix(in srgb, var(--warning) 9%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--warning) 25%, var(--border)); color: var(--warning); display: flex; font-size: 9.5px; gap: 6px; padding: 7px 10px; }
+.changes-file-list { border-bottom: 1px solid var(--border); flex: 0 0 auto; max-height: 150px; overflow-y: auto; padding: 5px; }
+.changes-file-list button { align-items: center; background: transparent; border: 0; border-radius: 5px; color: var(--text-muted); display: flex; gap: 7px; height: 29px; padding: 0 7px; text-align: left; width: 100%; }
+.changes-file-list button:hover { background: var(--panel-hover); }
+.changes-file-list button[aria-selected="true"] { background: color-mix(in srgb, var(--blue) 10%, var(--panel-raised)); color: var(--text); }
+.changes-file-list button > span { flex: 1; font-family: ui-monospace, "SFMono-Regular", monospace; font-size: 9.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes-file-list small { display: flex; font-size: 8.5px; gap: 5px; }
+.changes-file-list b { color: var(--success); font-weight: 600; }
+.changes-file-list i { color: var(--danger); font-style: normal; }
+.diff-document { background: #151514; flex: 1; min-height: 0; overflow: auto; }
+.diff-document__title { align-items: center; background: var(--panel-raised); border-bottom: 1px solid var(--border); display: flex; gap: 7px; min-height: 36px; padding: 7px 9px; position: sticky; top: 0; z-index: 1; }
+.diff-document__title code { flex: 1; font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-document__title span { color: var(--text-faint); font-size: 8px; text-transform: uppercase; }
+.diff-hunk { min-width: max-content; }
+.diff-hunk__header { background: color-mix(in srgb, var(--blue) 8%, #151514); color: var(--blue); font-family: ui-monospace, "SFMono-Regular", monospace; font-size: 9px; padding: 5px 8px; }
+.diff-line { display: grid; font-family: ui-monospace, "SFMono-Regular", monospace; font-size: 9.5px; grid-template-columns: 32px 32px minmax(220px, 1fr); line-height: 18px; min-height: 18px; }
+.diff-line > span { border-right: 1px solid color-mix(in srgb, var(--border) 65%, transparent); color: var(--text-faint); padding-right: 5px; text-align: right; user-select: none; }
+.diff-line code { padding: 0 8px; white-space: pre; }
+.diff-line code b { display: inline-block; font-weight: 500; width: 10px; }
+.diff-line--add { background: color-mix(in srgb, var(--success) 10%, transparent); }
+.diff-line--add code b { color: var(--success); }
+.diff-line--delete { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.diff-line--delete code b { color: var(--danger); }
+.diff-line--meta { color: var(--text-faint); font-style: italic; }
+
+.thread-group + .thread-group { margin-top: 8px; }
+.thread-row__title em { background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 4px; color: var(--accent); font-size: 7px; font-style: normal; letter-spacing: .06em; margin-left: 6px; padding: 1px 4px; vertical-align: 1px; }
+.handoff-hint { border-top: 1px solid var(--border); color: var(--text-faint); font-size: 9.5px; margin: 0 4px; padding: 10px 5px; }
+.inline-activity--changes { color: inherit; cursor: pointer; text-align: left; width: 100%; }
+.inline-activity--changes:hover { border-color: var(--border-strong); }
+.inline-activity__action { align-items: center; color: var(--blue); display: flex; font-size: 9.5px; gap: 3px; margin-top: 7px; }
+
 .panel-heading {
   align-items: center;
   border-bottom: 1px solid var(--border);
@@ -1207,7 +1277,8 @@ summary:focus-visible {
   .activity-panel { display: none; height: 100%; }
   .app-shell[data-mobile-view="tasks"] .thread-sidebar,
   .app-shell[data-mobile-view="chat"] .workspace,
-  .app-shell[data-mobile-view="activity"] .activity-panel { display: flex; }
+  .app-shell[data-mobile-view="activity"] .activity-panel,
+  .app-shell[data-mobile-view="changes"] .activity-panel { display: flex; }
   .thread-sidebar,
   .activity-panel { border: 0; }
   .conversation-empty,
@@ -1222,7 +1293,7 @@ summary:focus-visible {
     border-top: 1px solid var(--border);
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     height: 52px;
     left: 0;
     position: fixed;
@@ -1241,6 +1312,16 @@ summary:focus-visible {
     justify-content: center;
   }
   .mobile-tabs button[data-active="true"] { color: var(--text); }
+}
+
+@media (max-width: 560px) {
+  .app-header__bar { padding-left: 12px; padding-right: 12px; }
+  .header-context { display: none; }
+  .task-settings { align-items: stretch; flex-direction: column; gap: 6px; padding: 7px 10px; }
+  .task-settings__controls { gap: 6px; }
+  .task-setting { max-width: none; }
+  .review-button { justify-content: center; width: 100%; }
+  .composer-control--cwd { max-width: none; min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

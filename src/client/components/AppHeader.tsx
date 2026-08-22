@@ -1,4 +1,5 @@
 import { CircleStop, Cloud, Laptop, LoaderCircle, OctagonAlert } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type { BrowserSnapshot } from "../../shared/protocol";
 
@@ -9,6 +10,7 @@ interface AppHeaderProps {
   onInterrupt?: () => void;
   cwd: string;
   model: string;
+  controls?: ReactNode;
 }
 
 export function AppHeader({
@@ -18,16 +20,18 @@ export function AppHeader({
   onInterrupt,
   cwd,
   model,
+  controls,
 }: AppHeaderProps) {
   const ready = service.status === "ready";
   return (
     <header className="app-header">
-      <div className="app-header__title">
+      <div className="app-header__bar">
+        <div className="app-header__title">
         <span className="app-header__eyebrow">Codex</span>
         <span className="app-header__divider" aria-hidden="true" />
         <strong>{threadTitle ?? "New task"}</strong>
-      </div>
-      <div className="app-header__status">
+        </div>
+        <div className="app-header__status">
         <span className="header-context" title={`${model} · ${cwd}`}>
           {model}{cwd ? ` · ${cwd}` : ""}
         </span>
@@ -51,7 +55,9 @@ export function AppHeader({
             Stop
           </button>
         ) : null}
+        </div>
       </div>
+      {controls}
     </header>
   );
 }

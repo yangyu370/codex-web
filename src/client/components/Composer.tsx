@@ -10,6 +10,7 @@ interface ComposerProps {
   cwd: string;
   model: string;
   models: ModelSummary[];
+  showModel?: boolean;
   recentDirectories?: string[];
   running: boolean;
   disabled?: boolean;
@@ -30,6 +31,7 @@ export function Composer({
   cwd,
   model,
   models,
+  showModel = true,
   recentDirectories = [],
   running,
   disabled,
@@ -119,7 +121,7 @@ export function Composer({
               <FolderOpen size={14} />
             </button>
           </div>
-          <label className="composer-control">
+          {showModel ? <label className="composer-control">
             <span className="sr-only">Model</span>
             <select
               aria-label="Model"
@@ -132,7 +134,7 @@ export function Composer({
                 </option>
               ))}
             </select>
-          </label>
+          </label> : null}
           {running ? (
             <button aria-label="Stop" className="send-button send-button--stop" onClick={onInterrupt} type="button">
               <Square size={11} fill="currentColor" />

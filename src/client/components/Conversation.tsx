@@ -6,9 +6,10 @@ import type { VisibleItem } from "../../shared/protocol";
 
 interface ConversationProps {
   items: VisibleItem[];
+  onOpenChanges?: () => void;
 }
 
-export function Conversation({ items }: ConversationProps) {
+export function Conversation({ items, onOpenChanges }: ConversationProps) {
   if (items.length === 0) {
     return (
       <div className="conversation-empty">
@@ -25,13 +26,13 @@ export function Conversation({ items }: ConversationProps) {
   return (
     <div className="conversation-list" aria-live="polite">
       {items.map((item) => (
-        <ConversationItem item={item} key={item.id} />
+        <ConversationItem item={item} key={item.id} onOpenChanges={onOpenChanges} />
       ))}
     </div>
   );
 }
 
-function ConversationItem({ item }: { item: VisibleItem }) {
+function ConversationItem({ item, onOpenChanges }: { item: VisibleItem; onOpenChanges?: () => void }) {
   if (item.type === "message") {
     return (
       <article className={`message message--${item.role}`}>
@@ -58,14 +59,16 @@ function ConversationItem({ item }: { item: VisibleItem }) {
     );
   }
   if (item.type === "fileChange") {
+    const paths = item.changes?.map((change) => change.path) ?? [item.path];
     return (
-      <article className="inline-activity">
+      <button className="inline-activity inline-activity--changes" onClick={onOpenChanges} type="button">
         <div className="inline-activity__header">
           <FileCode2 size={14} />
-          <code>{item.path}</code>
+          <code>{paths.slice(0, 2).join(", ")}{paths.length > 2 ? ` +${paths.length - 2}` : ""}</code>
           <ActivityStatus status={item.status} />
         </div>
-      </article>
+        <span className="inline-activity__action">Inspect changes <ChevronRight size={13} /></span>
+      </button>
     );
   }
   return (

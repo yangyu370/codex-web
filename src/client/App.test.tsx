@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { BrowserSnapshot } from "../shared/protocol";
 import { App } from "./App";
+
+beforeEach(cleanup);
 
 const emptySnapshot: BrowserSnapshot = {
   kind: "snapshot",

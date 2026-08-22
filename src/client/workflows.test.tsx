@@ -327,4 +327,65 @@ describe("live client workflows", () => {
       params: { cwd: "/work/new" },
     });
   });
+
+  test("controls a live CLI task, starts review, and refreshes on focus", async () => {
+    const socket = new WorkflowSocket();
+    const snapshot: BrowserSnapshot = {
+      ...emptySnapshot,
+      service: { ...emptySnapshot.service, liveHandoff: "available" },
+      models: [{
+        ...emptySnapshot.models[0]!,
+        supportedReasoningEfforts: [{ id: "medium" }, { id: "high" }],
+        defaultReasoningEffort: "medium",
+      }],
+      permissionProfiles: [
+        { id: ":read-only", allowed: true },
+        { id: ":workspace", allowed: true },
+      ],
+      loadedThreadId: "cli-1",
+      threads: [{
+        id: "cli-1",
+        title: "CLI task",
+        preview: "Continue from the terminal",
+        createdAt: 1,
+        updatedAt: Date.now() / 1_000,
+        cwd: "/work/app",
+        source: "cli",
+        status: "idle",
+        canAcceptDirectInput: true,
+      }],
+      threadSettings: {
+        threadId: "cli-1",
+        model: "gpt-5.6",
+        effort: "medium",
+        permissionProfile: { id: ":read-only" },
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      },
+    };
+    const client = new CodexWebClient(snapshot, () => socket);
+    client.connect();
+    socket.onopen?.();
+    render(<App client={client} initialSnapshot={snapshot} />);
+    const user = userEvent.setup();
+
+    expect(screen.getByText("LIVE · CLI")).not.toBeNull();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Reasoning effort" }), "high");
+    const effortRequest = JSON.parse(socket.sent.at(-1) ?? "null");
+    expect(effortRequest).toMatchObject({ method: "thread.settings.update", params: { threadId: "cli-1", effort: "high" } });
+    await act(async () => { socket.receive({ kind: "response", id: effortRequest.id, result: {} }); await Bun.sleep(0); });
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Permission profile" }), ":workspace");
+    const permissionRequest = JSON.parse(socket.sent.at(-1) ?? "null");
+    expect(permissionRequest).toMatchObject({ method: "thread.settings.update", params: { threadId: "cli-1", permissionProfile: ":workspace" } });
+    await act(async () => { socket.receive({ kind: "response", id: permissionRequest.id, result: {} }); await Bun.sleep(0); });
+
+    await user.click(screen.getByRole("button", { name: "Review changes" }));
+    const reviewRequest = JSON.parse(socket.sent.at(-1) ?? "null");
+    expect(reviewRequest).toMatchObject({ method: "review.start", params: { threadId: "cli-1" } });
+    await act(async () => { socket.receive({ kind: "response", id: reviewRequest.id, result: {} }); await Bun.sleep(0); });
+
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(JSON.parse(socket.sent.at(-1) ?? "null")).toMatchObject({ method: "thread.list", params: {} });
+  });
 });

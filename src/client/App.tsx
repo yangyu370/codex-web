@@ -1,4 +1,4 @@
-import { Activity, MessageSquareText, Rows3 } from "lucide-react";
+import { Activity, FileDiff, MessageSquareText, Rows3 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BrowserSnapshot, DirectoryListing } from "../shared/protocol";
@@ -8,6 +8,7 @@ import { Composer } from "./components/Composer";
 import { Conversation } from "./components/Conversation";
 import { DirectoryPicker } from "./components/DirectoryPicker";
 import { ThreadSidebar } from "./components/ThreadSidebar";
+import { TaskSettings } from "./components/TaskSettings";
 import type { CodexWebClient, ConnectionStatus } from "./websocket";
 import {
   AttachmentClient,
@@ -26,7 +27,7 @@ export interface AppProps {
   attachmentClient?: AttachmentTransport;
   onSelectThread?: (threadId: string) => void;
   onNewTask?: () => void;
-  onSend?: (input: { text: string; cwd: string; model: string; attachmentSessionId?: string }) => void;
+  onSend?: (input: { text: string; cwd: string; model: string; effort?: string; permissionProfile?: string; attachmentSessionId?: string }) => void;
   onInterrupt?: () => void;
   onResolveApproval?: (id: string, decision: string) => void;
   onPersistSettings?: (settings: ClientSettings) => void;
@@ -67,7 +68,14 @@ export function App({
       initialSnapshot.models[0]?.id ??
       "",
   );
-  const [mobileView, setMobileView] = useState<"tasks" | "chat" | "activity">("chat");
+  const selectedModel = initialSnapshot.models.find((entry) => entry.id === initialSettings.model)
+    ?? initialSnapshot.models.find((entry) => entry.isDefault)
+    ?? initialSnapshot.models[0];
+  const [effort, setEffort] = useState(initialSettings.effort ?? selectedModel?.defaultReasoningEffort ?? selectedModel?.supportedReasoningEfforts?.[0]?.id);
+  const [permissionProfile, setPermissionProfile] = useState(initialSettings.permissionProfile);
+  const [pendingSetting, setPendingSetting] = useState<{ field: "effort" | "permissionProfile"; value: string }>();
+  const [inspectorTab, setInspectorTab] = useState<"activity" | "changes">("activity");
+  const [mobileView, setMobileView] = useState<"tasks" | "chat" | "activity" | "changes">("chat");
   const [actionError, setActionError] = useState<string>();
   const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const [directoryListing, setDirectoryListing] = useState<DirectoryListing>();
@@ -98,6 +106,10 @@ export function App({
   );
   const running = visibleSnapshot.activeTurn?.status === "inProgress";
   const attachmentBlocked = draftAttachments.some((attachment) => attachment.status !== "ready");
+  const loadedSettings = visibleSnapshot.threadSettings;
+  const effectiveModel = loadedSettings?.model ?? model;
+  const effectiveEffort = loadedSettings?.effort ?? effort;
+  const effectivePermissionProfile = loadedSettings?.permissionProfile?.id ?? permissionProfile;
 
   useEffect(() => {
     if (!client) return undefined;
@@ -106,6 +118,21 @@ export function App({
   }, [client]);
 
   useEffect(() => client?.subscribeConnection(setConnection), [client]);
+
+  useEffect(() => {
+    if (!client) return undefined;
+    const refresh = () => { void client.request("thread.list", {}).catch(() => undefined); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [client]);
+
+  useEffect(() => {
+    if (!pendingSetting || !snapshot.threadSettings) return;
+    const actual = pendingSetting.field === "effort"
+      ? snapshot.threadSettings.effort
+      : snapshot.threadSettings.permissionProfile?.id;
+    if (actual === pendingSetting.value) setPendingSetting(undefined);
+  }, [pendingSetting, snapshot.threadSettings]);
 
   useEffect(() => {
     if (newTaskMode) return;
@@ -267,12 +294,20 @@ export function App({
     const attachmentSessionId = draftAttachments.some((attachment) => attachment.status === "ready")
       ? attachmentSessionRef.current?.id
       : undefined;
-    const input = { text: draft, cwd, model, ...(attachmentSessionId ? { attachmentSessionId } : {}) };
+    const input = {
+      text: draft,
+      cwd,
+      model,
+      ...(effort ? { effort } : {}),
+      ...(permissionProfile ? { permissionProfile } : {}),
+      ...(attachmentSessionId ? { attachmentSessionId } : {}),
+    };
     try {
       setActionError(undefined);
       onSend?.(input);
       if (client) {
         let threadId = newTaskMode ? undefined : snapshot.loadedThreadId;
+        const creatingTask = !threadId;
         if (!threadId) {
           const result = (await client.request("thread.start", { cwd, model })) as { id: string };
           threadId = result.id;
@@ -281,14 +316,19 @@ export function App({
         await client.request("turn.start", {
           threadId,
           text: draft,
+          ...(creatingTask ? {
+            model,
+            ...(effort ? { effort } : {}),
+            ...(permissionProfile ? { permissionProfile } : {}),
+          } : {}),
           ...(attachmentSessionId ? { attachmentSessionId } : {}),
         });
       }
       const nextSettings = {
         recentDirectories: [cwd, ...settings.recentDirectories.filter((entry) => entry !== cwd)].slice(0, 20),
         model,
-        ...(settings.effort ? { effort: settings.effort } : {}),
-        ...(settings.permissionProfile ? { permissionProfile: settings.permissionProfile } : {}),
+        ...(effort ? { effort } : {}),
+        ...(permissionProfile ? { permissionProfile } : {}),
       };
       setSettings(nextSettings);
       onPersistSettings?.(nextSettings);
@@ -314,10 +354,53 @@ export function App({
     if (client) {
       void client
         .request("approval.resolve", { approvalId: id, decision })
-        .catch((error: unknown) => setActionError(errorMessage(error)));
+        .catch((error: unknown) => {
+          if (errorMessage(error).toLowerCase().includes("alreadyresolved")) {
+            void client.request("thread.list", {}).catch(() => undefined);
+            return;
+          }
+          setActionError(errorMessage(error));
+        });
     }
   }
 
+  async function updateTaskSettings(change: { effort?: string; permissionProfile?: string }) {
+    const field = change.effort ? "effort" : "permissionProfile";
+    const value = change.effort ?? change.permissionProfile;
+    if (!value) return;
+    if (!visibleSnapshot.loadedThreadId || newTaskMode) {
+      if (field === "effort") setEffort(value);
+      else setPermissionProfile(value);
+      return;
+    }
+    if (!client) return;
+    setPendingSetting({ field, value });
+    setActionError(undefined);
+    try {
+      await client.request("thread.settings.update", {
+        threadId: visibleSnapshot.loadedThreadId,
+        [field]: value,
+      });
+      const nextSettings = { ...settings, [field]: value };
+      setSettings(nextSettings);
+      onPersistSettings?.(nextSettings);
+    } catch (error) {
+      setPendingSetting(undefined);
+      setActionError(errorMessage(error));
+    }
+  }
+
+  async function startReview() {
+    if (!client || !visibleSnapshot.loadedThreadId) return;
+    setActionError(undefined);
+    try {
+      await client.request("review.start", { threadId: visibleSnapshot.loadedThreadId });
+      setInspectorTab("changes");
+      setMobileView("changes");
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
   async function newTask() {
     await discardAttachmentDraft();
     setNewTaskMode(true);
@@ -351,6 +434,21 @@ export function App({
     }
   }
 
+  const reviewRunning = visibleSnapshot.review?.status === "inProgress";
+  const reviewEnabled = Boolean(visibleSnapshot.loadedThreadId) &&
+    visibleSnapshot.service.status === "ready" && !running && thread?.canAcceptDirectInput !== false;
+  const reviewDisabledReason = reviewRunning
+    ? "Review is already running"
+    : !visibleSnapshot.loadedThreadId
+      ? "Open an idle task to review changes"
+      : visibleSnapshot.service.status !== "ready"
+        ? "Codex is not ready"
+        : running
+          ? "Wait for the active turn to finish"
+          : thread?.canAcceptDirectInput === false
+            ? "This task is available as history only"
+            : undefined;
+
   return (
     <div className="app-shell" data-mobile-view={mobileView}>
       <ThreadSidebar
@@ -363,16 +461,37 @@ export function App({
         }}
         query={query}
         selectedId={visibleSnapshot.loadedThreadId}
+        service={visibleSnapshot.service}
         threads={visibleSnapshot.threads}
       />
       <section className="workspace">
         <AppHeader
           activeTurn={visibleSnapshot.activeTurn}
           cwd={cwd}
-          model={snapshot.models.find((entry) => entry.id === model)?.displayName ?? model}
+          model={snapshot.models.find((entry) => entry.id === effectiveModel)?.displayName ?? effectiveModel}
           onInterrupt={interrupt}
           service={visibleSnapshot.service}
           threadTitle={thread?.title}
+          controls={<TaskSettings
+            disabled={visibleSnapshot.service.status !== "ready"}
+            effort={effectiveEffort}
+            model={effectiveModel}
+            models={visibleSnapshot.models}
+            onModelChange={(nextModel, nextEffort) => {
+              setModel(nextModel);
+              if (nextEffort) setEffort(nextEffort);
+            }}
+            onReview={() => void startReview()}
+            onSettingsChange={(change) => void updateTaskSettings(change)}
+            pending={pendingSetting?.field}
+            permissionProfile={effectivePermissionProfile}
+            permissionProfiles={visibleSnapshot.permissionProfiles ?? []}
+            reviewDisabledReason={reviewDisabledReason}
+            reviewEnabled={reviewEnabled}
+            reviewRunning={reviewRunning}
+            running={running}
+            showModel={Boolean(visibleSnapshot.loadedThreadId)}
+          />}
         />
         {visibleSnapshot.service.error || actionError ? (
           <div className="service-diagnostic" role="alert">
@@ -383,12 +502,16 @@ export function App({
           </div>
         ) : null}
         <main>
-          <Conversation items={visibleSnapshot.visibleItems} />
+          <Conversation items={visibleSnapshot.visibleItems} onOpenChanges={() => {
+            setInspectorTab("changes");
+            setMobileView("changes");
+          }} />
           <Composer
             cwd={cwd}
             disabled={visibleSnapshot.service.status !== "ready"}
             model={model}
             models={visibleSnapshot.models}
+            showModel={!visibleSnapshot.loadedThreadId}
             recentDirectories={settings.recentDirectories}
             attachments={draftAttachments}
             attachmentBlocked={attachmentBlocked}
@@ -407,9 +530,15 @@ export function App({
       </section>
       <ActivityPanel
         approvals={visibleSnapshot.pendingApprovals}
+        activeTab={inspectorTab}
         items={visibleSnapshot.visibleItems}
+        onTabChange={(tab) => {
+          setInspectorTab(tab);
+          if (mobileView === "activity" || mobileView === "changes") setMobileView(tab);
+        }}
         onResolveApproval={resolveApproval}
         tokenUsage={visibleSnapshot.tokenUsage}
+        turnDiff={visibleSnapshot.turnDiff}
       />
       {directoryPickerOpen ? (
         <DirectoryPicker
@@ -430,8 +559,11 @@ export function App({
         <button data-active={mobileView === "chat"} onClick={() => setMobileView("chat")} type="button">
           <MessageSquareText size={16} /> Chat
         </button>
-        <button data-active={mobileView === "activity"} onClick={() => setMobileView("activity")} type="button">
+        <button data-active={mobileView === "activity"} onClick={() => { setInspectorTab("activity"); setMobileView("activity"); }} type="button">
           <Activity size={16} /> Activity
+        </button>
+        <button data-active={mobileView === "changes"} onClick={() => { setInspectorTab("changes"); setMobileView("changes"); }} type="button">
+          <FileDiff size={16} /> Changes
         </button>
       </nav>
     </div>

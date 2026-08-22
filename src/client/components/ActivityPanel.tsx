@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 
 import type { PendingApproval, VisibleItem } from "../../shared/protocol";
+import type { TurnDiffSummary } from "../../shared/protocol";
+import { ChangesPanel } from "./ChangesPanel";
 
 type ActivityItem = Exclude<VisibleItem, { type: "message" }>;
 
@@ -17,6 +19,9 @@ interface ActivityPanelProps {
   approvals: PendingApproval[];
   onResolveApproval?: (id: string, decision: string) => void;
   tokenUsage?: { used: number; contextWindow?: number };
+  activeTab?: "activity" | "changes";
+  onTabChange?: (tab: "activity" | "changes") => void;
+  turnDiff?: TurnDiffSummary;
 }
 
 export function ActivityPanel({
@@ -24,15 +29,24 @@ export function ActivityPanel({
   approvals,
   onResolveApproval,
   tokenUsage,
+  activeTab = "activity",
+  onTabChange,
+  turnDiff,
 }: ActivityPanelProps) {
   const activities = items.filter(isActivityItem);
   return (
-    <aside aria-label="Activity" className="activity-panel">
+    <aside aria-label={activeTab === "activity" ? "Activity" : "Changes"} className="activity-panel">
+      <div className="inspector-tabs" role="tablist" aria-label="Inspector">
+        <button aria-selected={activeTab === "activity"} onClick={() => onTabChange?.("activity")} role="tab" type="button">
+          Activity {approvals.length ? <span>{approvals.length}</span> : null}
+        </button>
+        <button aria-selected={activeTab === "changes"} onClick={() => onTabChange?.("changes")} role="tab" type="button">
+          Changes
+        </button>
+      </div>
+      {activeTab === "changes" ? <ChangesPanel items={items} turnDiff={turnDiff} /> : <>
       <div className="panel-heading">
-        <div>
-          <span className="panel-heading__eyebrow">Live</span>
-          <h2>Activity</h2>
-        </div>
+        <div><span className="panel-heading__eyebrow">Live</span><h2>Activity</h2></div>
         <CircleEllipsis size={17} />
       </div>
       {tokenUsage ? (
@@ -65,6 +79,7 @@ export function ActivityPanel({
           activities.map((item) => <ActivityRow item={item} key={item.id} />)
         )}
       </div>
+      </>}
     </aside>
   );
 }

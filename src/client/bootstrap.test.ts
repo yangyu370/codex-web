@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import type { BrowserSnapshot } from "../shared/protocol";
+import { WEB_PROTOCOL_VERSION, type BrowserSnapshot } from "../shared/protocol";
 import { assertCompatibleSnapshot } from "./bootstrap";
 
 const snapshot: BrowserSnapshot = {
   kind: "snapshot",
-  protocolVersion: 2,
+  protocolVersion: WEB_PROTOCOL_VERSION,
   sequence: 0,
   service: { status: "ready", platform: "macos" },
   models: [],
