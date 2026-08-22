@@ -1,6 +1,10 @@
+import path from "node:path";
+
 import type { AppServerProcess, HostPlatform } from "../platform";
+import { startManagedDaemon, type DaemonConnectionInfo } from "./daemon";
 import { createJsonlTransport } from "./jsonl-transport";
-import { JsonRpcPeer } from "./json-rpc";
+import { JsonRpcPeer, type JsonRpcTransport } from "./json-rpc";
+import { connectUnixWebSocket } from "./unix-websocket-transport";
 
 const STDERR_CAP_BYTES = 262_144;
 const RESTART_DELAYS_MS = [250, 1_000, 4_000, 10_000] as const;
@@ -16,6 +20,8 @@ export interface AppServerProcessSnapshot {
   status: AppServerStatus;
   codexVersion?: string;
   error?: string;
+  mode?: "daemon" | "embedded";
+  liveHandoff?: "available" | "unavailable";
 }
 
 export interface AppServerProcessManagerOptions {
@@ -23,6 +29,11 @@ export interface AppServerProcessManagerOptions {
   env?: Record<string, string>;
   version?: (executable: string) => Promise<string>;
   sleep?: (milliseconds: number) => Promise<void>;
+  daemonStart?: (
+    executable: string,
+    codexHome: string,
+  ) => Promise<DaemonConnectionInfo>;
+  daemonConnect?: (socketPath: string) => Promise<JsonRpcTransport>;
 }
 
 export class AppServerProcessManager {
@@ -32,6 +43,8 @@ export class AppServerProcessManager {
   #snapshot: AppServerProcessSnapshot = { status: "starting" };
   #child?: AppServerProcess;
   #peer?: JsonRpcPeer;
+  #daemonTransport?: JsonRpcTransport;
+  #unsubscribeDaemonClose?: () => void;
   #intentionalShutdown = false;
   #restartAttempt = 0;
   #stderrChunks: Uint8Array[] = [];
@@ -50,7 +63,18 @@ export class AppServerProcessManager {
     }
     this.#intentionalShutdown = false;
     this.#setSnapshot({ status: "starting" });
-    this.#startPromise = this.#launch();
+    this.#startPromise = this.#launch().catch((error: unknown) => {
+      this.#startPromise = undefined;
+      if (this.#snapshot.status !== "unavailable") {
+        this.#setSnapshot({
+          status: "unavailable",
+          error: error instanceof Error ? error.message : String(error),
+          mode: this.#platform.kind === "windows" ? "embedded" : this.#snapshot.mode,
+          liveHandoff: "unavailable",
+        });
+      }
+      throw error;
+    });
     return this.#startPromise;
   }
 
@@ -84,8 +108,11 @@ export class AppServerProcessManager {
     this.#intentionalShutdown = true;
     this.#startPromise = undefined;
     const child = this.#child;
+    this.#unsubscribeDaemonClose?.();
+    this.#unsubscribeDaemonClose = undefined;
     this.#peer?.close(new Error("app-server stopped"));
     this.#peer = undefined;
+    this.#daemonTransport = undefined;
     this.#child = undefined;
     if (child) {
       const exitedGracefully = await Promise.race([
@@ -99,17 +126,82 @@ export class AppServerProcessManager {
     this.#setSnapshot({
       status: "unavailable",
       codexVersion: this.#snapshot.codexVersion,
+      mode: this.#snapshot.mode,
+      liveHandoff: "unavailable",
     });
   }
 
   async #launch(): Promise<JsonRpcPeer> {
+    const executable = await this.#platform.resolveCodexExecutable(
+      this.#options.configuredExecutable,
+    );
+    const codexVersion = await (this.#options.version ?? readCodexVersion)(
+      executable,
+    );
+    let daemonFailure: string | undefined;
+    if (this.#platform.kind === "macos") {
+      try {
+        return await this.#launchDaemon(executable, codexVersion);
+      } catch (error) {
+        daemonFailure = error instanceof Error ? error.message : String(error);
+        this.#unsubscribeDaemonClose?.();
+        this.#unsubscribeDaemonClose = undefined;
+        this.#peer?.close(new Error("shared daemon initialization failed"));
+        this.#peer = undefined;
+        this.#daemonTransport = undefined;
+      }
+    }
+    return this.#launchEmbedded(executable, codexVersion, daemonFailure);
+  }
+
+  async #launchDaemon(executable: string, codexVersion: string): Promise<JsonRpcPeer> {
+    const codexHome = this.#options.env?.CODEX_HOME
+      ?? path.posix.join(this.#platform.homeDirectory(), ".codex");
+    const startDaemon = this.#options.daemonStart
+      ?? ((resolvedExecutable: string, resolvedCodexHome: string) => startManagedDaemon(
+        resolvedExecutable,
+        resolvedCodexHome,
+        {
+          spawn: (command, environment) => this.#platform.spawnCommand(
+            command,
+            {
+              ...environment,
+              ...this.#options.env,
+              CODEX_HOME: resolvedCodexHome,
+            },
+          ),
+        },
+      ));
+    const daemon = await startDaemon(executable, codexHome);
+    const transport = await (this.#options.daemonConnect ?? connectUnixWebSocket)(
+      daemon.socketPath,
+    );
+    const peer = new JsonRpcPeer(transport);
+    this.#peer = peer;
+    await this.#initialize(peer);
+    this.#daemonTransport = transport;
+    this.#unsubscribeDaemonClose = transport.onClose((reason) => {
+      void this.#handleDaemonClose(
+        transport,
+        reason ?? new Error("shared daemon connection closed"),
+      );
+    });
+    this.#restartAttempt = 0;
+    this.#setSnapshot({
+      status: "ready",
+      codexVersion,
+      mode: "daemon",
+      liveHandoff: "available",
+    });
+    return peer;
+  }
+
+  async #launchEmbedded(
+    executable: string,
+    codexVersion: string,
+    daemonFailure?: string,
+  ): Promise<JsonRpcPeer> {
     try {
-      const executable = await this.#platform.resolveCodexExecutable(
-        this.#options.configuredExecutable,
-      );
-      const codexVersion = await (this.#options.version ?? readCodexVersion)(
-        executable,
-      );
       const child = this.#platform.spawnAppServer(
         executable,
         this.#options.env ?? environmentStrings(process.env),
@@ -120,13 +212,15 @@ export class AppServerProcessManager {
 
       const peer = new JsonRpcPeer(createJsonlTransport(child.stdout, child.stdin));
       this.#peer = peer;
-      await peer.request("initialize", {
-        clientInfo: { name: "codex-web", version: "0.1.0" },
-        capabilities: { experimentalApi: true },
-      });
-      peer.notify("initialized");
+      await this.#initialize(peer);
       this.#restartAttempt = 0;
-      this.#setSnapshot({ status: "ready", codexVersion });
+      this.#setSnapshot({
+        status: "ready",
+        codexVersion,
+        mode: "embedded",
+        liveHandoff: "unavailable",
+        ...(daemonFailure ? { error: daemonFailure } : {}),
+      });
       return peer;
     } catch (error) {
       const child = this.#child;
@@ -140,9 +234,19 @@ export class AppServerProcessManager {
       this.#setSnapshot({
         status: "unavailable",
         error: error instanceof Error ? error.message : String(error),
+        mode: "embedded",
+        liveHandoff: "unavailable",
       });
       throw error;
     }
+  }
+
+  async #initialize(peer: JsonRpcPeer): Promise<void> {
+    await peer.request("initialize", {
+      clientInfo: { name: "codex-web", version: "0.1.0" },
+      capabilities: { experimentalApi: true },
+    });
+    peer.notify("initialized");
   }
 
   async #handleExit(child: AppServerProcess, exitCode: number): Promise<void> {
@@ -157,6 +261,33 @@ export class AppServerProcessManager {
       status: "restarting",
       codexVersion: this.#snapshot.codexVersion,
       error: `app-server exited with code ${exitCode}`,
+      mode: "embedded",
+      liveHandoff: "unavailable",
+    });
+    if (!this.#restartPromise) {
+      this.#restartPromise = this.#restartUntilReady().finally(() => {
+        this.#restartPromise = undefined;
+      });
+    }
+    await this.#restartPromise;
+  }
+
+  async #handleDaemonClose(
+    transport: JsonRpcTransport,
+    reason: Error,
+  ): Promise<void> {
+    if (this.#intentionalShutdown || transport !== this.#daemonTransport) return;
+    this.#unsubscribeDaemonClose?.();
+    this.#unsubscribeDaemonClose = undefined;
+    this.#daemonTransport = undefined;
+    this.#peer = undefined;
+    this.#startPromise = undefined;
+    this.#setSnapshot({
+      status: "restarting",
+      codexVersion: this.#snapshot.codexVersion,
+      error: reason.message,
+      mode: "daemon",
+      liveHandoff: "available",
     });
     if (!this.#restartPromise) {
       this.#restartPromise = this.#restartUntilReady().finally(() => {
@@ -176,6 +307,8 @@ export class AppServerProcessManager {
         status: "restarting",
         codexVersion: this.#snapshot.codexVersion,
         error: this.#snapshot.error,
+        mode: this.#snapshot.mode,
+        liveHandoff: this.#snapshot.liveHandoff,
       });
       this.#startPromise = this.#launch();
       try {

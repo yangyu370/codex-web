@@ -52,6 +52,7 @@ export interface HostPlatform {
     executable: string,
     env: Record<string, string>,
   ): AppServerProcess;
+  spawnCommand(command: string[], env: Record<string, string>): AppServerProcess;
   terminateProcessTree(child: AppServerProcess): Promise<void>;
   homeDirectory(): string;
   dataDirectory(): string;

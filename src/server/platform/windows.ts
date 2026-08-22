@@ -49,6 +49,10 @@ export function createWindowsPlatform(runtime: PlatformRuntime): HostPlatform {
       return runtime.spawn([executable, "app-server", "--stdio"], env);
     },
 
+    spawnCommand(command, env) {
+      return runtime.spawn(command, env);
+    },
+
     terminateProcessTree(child) {
       return runtime.terminateTree("windows", child);
     },

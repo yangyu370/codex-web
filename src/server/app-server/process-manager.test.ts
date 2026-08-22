@@ -1,7 +1,33 @@
 import { describe, expect, test } from "bun:test";
 
 import type { AppServerProcess, HostPlatform } from "../platform";
+import type { JsonRpcTransport } from "./json-rpc";
 import { AppServerProcessManager } from "./process-manager";
+
+class MemoryTransport implements JsonRpcTransport {
+  readonly outbound: string[] = [];
+  closeCount = 0;
+  readonly #messageListeners = new Set<(source: string) => void>();
+  readonly #closeListeners = new Set<(reason?: Error) => void>();
+
+  send(source: string): void { this.outbound.push(source); }
+  close(): void { this.closeCount += 1; }
+  onMessage(listener: (source: string) => void): () => void {
+    this.#messageListeners.add(listener);
+    return () => this.#messageListeners.delete(listener);
+  }
+  onClose(listener: (reason?: Error) => void): () => void {
+    this.#closeListeners.add(listener);
+    return () => this.#closeListeners.delete(listener);
+  }
+  receive(value: unknown): void {
+    const source = JSON.stringify(value);
+    for (const listener of this.#messageListeners) listener(source);
+  }
+  disconnect(reason = new Error("daemon disconnected")): void {
+    for (const listener of this.#closeListeners) listener(reason);
+  }
+}
 
 function fakeProcess() {
   const stdout = new TransformStream<Uint8Array, Uint8Array>();
@@ -43,9 +69,10 @@ function fakeProcess() {
 function fakePlatform(
   processes: ReturnType<typeof fakeProcess>[],
   onTerminate: (process: AppServerProcess) => void = () => undefined,
+  kind: HostPlatform["kind"] = "windows",
 ): HostPlatform {
   return {
-    kind: "macos",
+    kind,
     arch: "arm64",
     resolveCodexExecutable: async () => "/opt/codex/bin/codex",
     validateWorkingDirectory: async (input) => ({ displayPath: input, resolvedPath: input }),
@@ -55,6 +82,9 @@ function fakePlatform(
         throw new Error("no fake process available");
       }
       return process.child;
+    },
+    spawnCommand: () => {
+      throw new Error("unexpected lifecycle command");
     },
     terminateProcessTree: async (process) => onTerminate(process),
     homeDirectory: () => "/work",
@@ -72,6 +102,149 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("AppServerProcessManager", () => {
+  test("reports executable discovery failures as unavailable", async () => {
+    const platform = fakePlatform([]);
+    platform.resolveCodexExecutable = async () => {
+      throw new Error("codex not found");
+    };
+    const manager = new AppServerProcessManager(platform);
+
+    await expect(manager.start()).rejects.toThrow("codex not found");
+
+    expect(manager.snapshot()).toMatchObject({
+      status: "unavailable",
+      error: "codex not found",
+      liveHandoff: "unavailable",
+    });
+  });
+
+  test("prefers the shared daemon on macOS and leaves it running on stop", async () => {
+    const transport = new MemoryTransport();
+    const terminated: number[] = [];
+    const lifecycleCalls: string[] = [];
+    const manager = new AppServerProcessManager(
+      fakePlatform([], (child) => terminated.push(child.pid), "macos"),
+      {
+        version: async () => "codex-cli 1.2.3",
+        daemonStart: async (_executable, codexHome) => {
+          lifecycleCalls.push(codexHome);
+          return {
+            socketPath: `${codexHome}/app-server-control/app-server-control.sock`,
+            appServerVersion: "1.2.3",
+          };
+        },
+        daemonConnect: async () => transport,
+      },
+    );
+
+    const starting = manager.start();
+    await waitFor(() => transport.outbound.length === 1);
+    transport.receive({ jsonrpc: "2.0", id: 1, result: {} });
+    await starting;
+
+    expect(lifecycleCalls).toEqual(["/work/.codex"]);
+    expect(manager.snapshot()).toMatchObject({
+      status: "ready",
+      mode: "daemon",
+      liveHandoff: "available",
+    });
+
+    await manager.stop();
+    expect(transport.closeCount).toBe(1);
+    expect(terminated).toEqual([]);
+  });
+
+  test.each(["lifecycle", "socket"])(
+    "falls back to embedded mode after a daemon %s failure",
+    async (failure) => {
+      const process = fakeProcess();
+      const manager = new AppServerProcessManager(
+        fakePlatform([process], undefined, "macos"),
+        {
+          version: async () => "codex-cli 1.2.3",
+          daemonStart: async () => {
+            if (failure === "lifecycle") throw new Error("daemon start failed");
+            return { socketPath: "/work/.codex/app-server-control/socket" };
+          },
+          daemonConnect: async () => {
+            throw new Error("daemon socket failed");
+          },
+        },
+      );
+
+      const starting = manager.start();
+      await waitFor(() => process.outbound.length === 1);
+      await process.send({ jsonrpc: "2.0", id: 1, result: {} });
+      await starting;
+
+      expect(manager.snapshot()).toMatchObject({
+        status: "ready",
+        mode: "embedded",
+        liveHandoff: "unavailable",
+      });
+      expect(manager.snapshot().error).toContain(
+        failure === "lifecycle" ? "daemon start failed" : "daemon socket failed",
+      );
+    },
+  );
+
+  test("never invokes daemon lifecycle startup on Windows", async () => {
+    const process = fakeProcess();
+    let daemonStarts = 0;
+    const manager = new AppServerProcessManager(fakePlatform([process]), {
+      version: async () => "codex-cli 1.2.3",
+      daemonStart: async () => {
+        daemonStarts += 1;
+        throw new Error("must not run");
+      },
+    });
+
+    const starting = manager.start();
+    await waitFor(() => process.outbound.length === 1);
+    await process.send({ jsonrpc: "2.0", id: 1, result: {} });
+    await starting;
+
+    expect(daemonStarts).toBe(0);
+    expect(manager.snapshot()).toMatchObject({
+      mode: "embedded",
+      liveHandoff: "unavailable",
+    });
+  });
+
+  test("reconnects the shared daemon with bounded backoff", async () => {
+    const first = new MemoryTransport();
+    const second = new MemoryTransport();
+    const transports = [first, second];
+    const delays: number[] = [];
+    let lifecycleStarts = 0;
+    const manager = new AppServerProcessManager(fakePlatform([], undefined, "macos"), {
+      version: async () => "codex-cli 1.2.3",
+      daemonStart: async () => {
+        lifecycleStarts += 1;
+        return { socketPath: "/work/.codex/app-server-control/socket" };
+      },
+      daemonConnect: async () => {
+        const transport = transports.shift();
+        if (!transport) throw new Error("no daemon transport available");
+        return transport;
+      },
+      sleep: async (milliseconds) => { delays.push(milliseconds); },
+    });
+    const starting = manager.start();
+    await waitFor(() => first.outbound.length === 1);
+    first.receive({ jsonrpc: "2.0", id: 1, result: {} });
+    await starting;
+
+    first.disconnect();
+    await waitFor(() => second.outbound.length === 1);
+    second.receive({ jsonrpc: "2.0", id: 1, result: {} });
+    await waitFor(() => manager.snapshot().status === "ready");
+
+    expect(delays).toEqual([250]);
+    expect(lifecycleStarts).toBe(2);
+    expect(manager.snapshot()).toMatchObject({ mode: "daemon", liveHandoff: "available" });
+  });
+
   test("becomes ready only after initialize and initialized handshake", async () => {
     const process = fakeProcess();
     const manager = new AppServerProcessManager(fakePlatform([process]), {
