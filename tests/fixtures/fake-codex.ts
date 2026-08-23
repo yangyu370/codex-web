@@ -53,10 +53,22 @@ async function handle(message: Record<string, unknown>): Promise<void> {
     });
   }
   if (method === "permissionProfile/list") {
+    const largeCatalogTail = Array.from({ length: 197 }, (_, index) => index === 196
+      ? {
+          id: `:unknown-${"x".repeat(220)}`,
+          description: `ServerPolicyExplanation${"z".repeat(320)}`,
+          allowed: true,
+        }
+      : {
+          id: `:custom-${index + 1}`,
+          description: `Custom permission profile ${index + 1}`,
+          allowed: true,
+        });
     return respond(id, { data: [
       { id: ":read-only", description: "Read without editing", allowed: true },
       { id: ":workspace", description: "Edit this workspace", allowed: true },
       { id: ":managed", description: "Blocked by managed policy", allowed: false },
+      ...largeCatalogTail,
     ] });
   }
   if (method === "thread/list") {

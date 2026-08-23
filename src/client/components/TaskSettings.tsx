@@ -100,6 +100,7 @@ export function TaskSettings({
   const permissionOptionRefs = useRef(new Map<string, HTMLButtonElement>());
   const permissionMenuId = useId();
   const permissionHeadingId = useId();
+  const permissionActiveModeId = useId();
   const selectedModel = models.find((entry) => entry.id === model) ?? models[0];
   const catalogEfforts = selectedModel?.supportedReasoningEfforts ?? [];
   const efforts = effort && !catalogEfforts.some((entry) => entry.id === effort)
@@ -118,7 +119,13 @@ export function TaskSettings({
     : permissionProfile
       ? { label: permissionProfile }
       : undefined;
-  const permissionMenuDisabled = disabled || pending === "permissionProfile" || permissionProfiles.length === 0;
+  const permissionMenuNativeDisabled = disabled || permissionProfiles.length === 0;
+  const permissionMenuPending = pending === "permissionProfile";
+  const permissionMenuUnavailable = permissionMenuNativeDisabled || permissionMenuPending;
+
+  useEffect(() => {
+    if (permissionMenuOpen && permissionMenuUnavailable) setPermissionMenuOpen(false);
+  }, [permissionMenuOpen, permissionMenuUnavailable]);
 
   useEffect(() => {
     if (!permissionMenuOpen) return;
@@ -150,7 +157,7 @@ export function TaskSettings({
   }, [permissionMenuOpen]);
 
   const selectPermission = (profile: PermissionProfileSummary) => {
-    if (!profile.allowed) return;
+    if (permissionMenuUnavailable || !profile.allowed) return;
     onSettingsChange({ permissionProfile: profile.id });
     setPermissionMenuOpen(false);
     permissionTriggerRef.current?.focus();
@@ -199,17 +206,22 @@ export function TaskSettings({
           <span><ShieldCheck size={13} /> Permissions {running ? <em>Next turn</em> : null}</span>
           <button
             aria-controls={permissionMenuId}
+            aria-describedby={permissionActiveModeId}
+            aria-disabled={permissionMenuPending || undefined}
             aria-expanded={permissionMenuOpen}
             aria-haspopup="dialog"
             aria-label="Permissions"
             className="permission-profile-trigger"
-            disabled={permissionMenuDisabled}
-            onClick={() => setPermissionMenuOpen((open) => !open)}
+            disabled={permissionMenuNativeDisabled}
+            onClick={() => {
+              if (permissionMenuUnavailable) return;
+              setPermissionMenuOpen((open) => !open);
+            }}
             ref={permissionTriggerRef}
             title={selectedPermissionPresentation?.label ?? "Select a permission profile"}
             type="button"
           >
-            <span className="permission-profile-trigger__content">
+            <span className="permission-profile-trigger__content" id={permissionActiveModeId}>
               {selectedPermissionPresentation?.label ?? "Select profile"}
             </span>
           </button>
@@ -234,7 +246,7 @@ export function TaskSettings({
                       aria-pressed={selected}
                       className="permission-profile-option"
                       data-profile-id={profile.id}
-                      disabled={!profile.allowed}
+                      disabled={permissionMenuUnavailable || !profile.allowed}
                       key={profile.id}
                       onClick={() => selectPermission(profile)}
                       ref={(element) => {

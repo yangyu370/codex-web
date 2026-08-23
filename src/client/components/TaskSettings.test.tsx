@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 
 import { TaskSettings } from "./TaskSettings";
 
@@ -58,6 +59,18 @@ describe("TaskSettings", () => {
     const triggers = screen.getAllByRole("button", { name: "Permissions" });
     const firstTrigger = triggers[0]!;
     const secondTrigger = triggers[1]!;
+    const firstDescriptionId = firstTrigger.getAttribute("aria-describedby");
+    const secondDescriptionId = secondTrigger.getAttribute("aria-describedby");
+
+    expect({
+      descriptionsAreUnique: firstDescriptionId !== secondDescriptionId,
+      firstDescription: firstDescriptionId ? document.getElementById(firstDescriptionId)?.textContent : undefined,
+      secondDescription: secondDescriptionId ? document.getElementById(secondDescriptionId)?.textContent : undefined,
+    }).toEqual({
+      descriptionsAreUnique: true,
+      firstDescription: "Approve when needed",
+      secondDescription: "Approve when needed",
+    });
 
     await user.click(firstTrigger);
 
@@ -189,6 +202,36 @@ describe("TaskSettings", () => {
     expect(screen.queryByRole("dialog", { name: "How should Codex run?" })).toBeNull();
   });
 
+  test("closes an open permissions menu when the controls become disabled", async () => {
+    const changes: unknown[] = [];
+    let disableControls: () => void = () => undefined;
+    function Harness() {
+      const [controlsDisabled, setControlsDisabled] = useState(false);
+      disableControls = () => setControlsDisabled(true);
+      return <TaskSettings
+        disabled={controlsDisabled}
+        model="gpt-5.6"
+        models={models}
+        onReview={() => undefined}
+        onSettingsChange={(change) => changes.push(change)}
+        permissionProfile=":workspace"
+        permissionProfiles={profiles}
+      />;
+    }
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Permissions" }));
+    expect(screen.getByRole("dialog", { name: "How should Codex run?" })).not.toBeNull();
+
+    (document.activeElement as HTMLElement | null)?.blur();
+    act(disableControls);
+
+    expect(screen.queryByRole("dialog", { name: "How should Codex run?" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Permissions" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(changes).toEqual([]);
+  });
+
   test("selects an option from the keyboard and restores focus to the trigger", async () => {
     const changes: unknown[] = [];
     render(
@@ -213,20 +256,40 @@ describe("TaskSettings", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  test("disables the permissions trigger while its setting update is pending", () => {
-    render(
-      <TaskSettings
+  test("keeps focus on the non-activatable trigger when selection synchronously becomes pending", async () => {
+    const changes: unknown[] = [];
+    function PendingHarness() {
+      const [settingPending, setSettingPending] = useState(false);
+      return <TaskSettings
         model="gpt-5.6"
         models={models}
         onReview={() => undefined}
-        onSettingsChange={() => undefined}
-        pending="permissionProfile"
+        onSettingsChange={(change) => {
+          changes.push(change);
+          setSettingPending(true);
+        }}
+        pending={settingPending ? "permissionProfile" : undefined}
         permissionProfile=":workspace"
         permissionProfiles={profiles}
-      />,
-    );
+      />;
+    }
+    render(<PendingHarness />);
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", { name: "Permissions" }) as HTMLButtonElement;
 
-    expect((screen.getByRole("button", { name: "Permissions" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "Full access" }));
+
+    expect(changes).toEqual([{ permissionProfile: ":danger-full-access" }]);
+    expect(screen.queryByRole("dialog", { name: "How should Codex run?" })).toBeNull();
+    expect(trigger.disabled).toBe(false);
+    expect(trigger.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(trigger);
+
+    await user.click(trigger);
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("dialog", { name: "How should Codex run?" })).toBeNull();
+    expect(changes).toHaveLength(1);
   });
 
   test("moves to the selected model default when the current effort is unsupported", async () => {

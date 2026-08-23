@@ -19,6 +19,46 @@ async function selectWorkspacePermissions(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Approve when needed" }).click();
 }
 
+test("keeps a large permissions catalog reachable inside a short viewport", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Short desktop viewport regression");
+  await page.setViewportSize({ width: 720, height: 360 });
+  await page.goto("/");
+
+  const trigger = page.getByRole("button", { name: "Permissions" });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "How should Codex run?" });
+  await expect(dialog).toBeVisible();
+
+  const longUnknownId = `:unknown-${"x".repeat(220)}`;
+  const lastOption = dialog.getByRole("button", { name: longUnknownId });
+  await lastOption.scrollIntoViewIfNeeded();
+  await expect(lastOption).toBeVisible();
+
+  const geometry = await dialog.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const lastBox = element.querySelector(".permission-profile-option:last-child")?.getBoundingClientRect();
+    return {
+      bottom: box.bottom,
+      clientHeight: element.clientHeight,
+      lastBottom: lastBox?.bottom,
+      lastTop: lastBox?.top,
+      overflowY: getComputedStyle(element).overflowY,
+      scrollHeight: element.scrollHeight,
+      top: box.top,
+    };
+  });
+  expect(geometry.top).toBeGreaterThanOrEqual(0);
+  expect(geometry.bottom).toBeLessThanOrEqual(360);
+  expect(geometry.overflowY).toBe("auto");
+  expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
+  expect(geometry.lastTop).toBeGreaterThanOrEqual(geometry.top);
+  expect(geometry.lastBottom).toBeLessThanOrEqual(geometry.bottom);
+
+  await lastOption.click();
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toHaveAccessibleDescription(longUnknownId);
+});
+
 test("keeps the composer in the initial viewport with a long task history", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "mobile", "Desktop grid regression");
   await page.goto("/");
