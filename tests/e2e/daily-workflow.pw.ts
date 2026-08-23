@@ -5,9 +5,7 @@ import { join } from "node:path";
 
 async function selectWorkspacePermissions(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Permissions" }).click();
-  const option = page.getByRole("button", { name: "Approve when needed" });
-  await option.focus();
-  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Approve when needed" }).click();
 }
 
 test("keeps the composer in the initial viewport with a long task history", async ({ page }, testInfo) => {
