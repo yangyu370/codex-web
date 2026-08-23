@@ -799,7 +799,7 @@ summary:focus-visible {
 
 .composer-controls { display: flex; gap: 6px; min-width: 0; }
 
-.composer-menu-anchor { position: relative; }
+.composer-menu-anchor { min-width: 0; position: relative; }
 
 .composer-chip {
   align-items: center;
@@ -808,6 +808,7 @@ summary:focus-visible {
   border-radius: 999px;
   color: var(--text-muted);
   display: inline-flex;
+  flex: 0 1 auto;
   font-size: 11px;
   gap: 5px;
   height: 28px;
@@ -815,6 +816,7 @@ summary:focus-visible {
   min-width: 0;
   padding: 0 5px 0 10px;
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  width: 100%;
 }
 
 .composer-chip:hover:not(:disabled):not([aria-disabled="true"]) {
@@ -827,7 +829,7 @@ summary:focus-visible {
 .composer-chip[aria-disabled="true"] { color: var(--text-faint); cursor: not-allowed; }
 .composer-chip[data-pending="true"] { border-color: var(--warning); opacity: 0.8; }
 .composer-chip__icon { align-items: center; color: var(--text-muted); display: inline-flex; flex: 0 0 auto; }
-.composer-chip__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-chip__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-chip__chevron { color: var(--text-faint); flex: 0 0 auto; transition: transform 120ms ease; }
 .composer-chip[aria-expanded="true"] .composer-chip__chevron { transform: rotate(180deg); }
 
@@ -839,7 +841,6 @@ summary:focus-visible {
   box-shadow: 0 18px 44px rgb(0 0 0 / 32%);
   left: 0;
   max-height: min(380px, calc(100dvh - 150px));
-  min-width: 260px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 6px;
@@ -874,7 +875,7 @@ summary:focus-visible {
   width: 100%;
 }
 
-.composer-menu__option--effort { grid-template-columns: minmax(0, 1fr) 18px; min-height: 34px; }
+.composer-menu__option--simple { grid-template-columns: minmax(0, 1fr) 18px; min-height: 34px; }
 .composer-menu__option:hover:not(:disabled) { background: var(--panel-hover); }
 .composer-menu__option[aria-pressed="true"] { background: color-mix(in srgb, var(--blue) 12%, transparent); }
 .composer-menu__option:disabled { color: var(--text-faint); cursor: not-allowed; opacity: 0.6; }
@@ -1172,6 +1173,28 @@ summary:focus-visible {
 .diff-line--meta { color: var(--text-faint); font-style: italic; }
 
 .thread-group + .thread-group { margin-top: 8px; }
+.thread-directory + .thread-directory,
+.thread-group + .thread-directory,
+.thread-directory + .thread-group { margin-top: 4px; }
+.thread-directory__header {
+  align-items: center;
+  color: var(--text-faint);
+  cursor: pointer;
+  display: flex;
+  font-size: 10px;
+  font-weight: 650;
+  gap: 6px;
+  list-style: none;
+  padding: 10px 7px 5px;
+  user-select: none;
+}
+.thread-directory__header::-webkit-details-marker { display: none; }
+.thread-directory__header:hover { color: var(--text-muted); }
+.thread-directory__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-directory__count { background: var(--panel-raised); border-radius: 8px; flex: 0 0 auto; font-size: 8.5px; min-width: 15px; padding: 1px 4px; text-align: center; }
+.thread-directory__chevron { flex: 0 0 auto; margin-left: auto; transition: transform 120ms ease; }
+.thread-directory__count + .thread-directory__chevron { margin-left: 0; }
+.thread-directory[open] > .thread-directory__chevron { transform: rotate(180deg); }
 .thread-row__title em { background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 4px; color: var(--accent); font-size: 7px; font-style: normal; letter-spacing: .06em; margin-left: 6px; padding: 1px 4px; vertical-align: 1px; }
 .handoff-hint { border-top: 1px solid var(--border); color: var(--text-faint); font-size: 9.5px; margin: 0 4px; padding: 10px 5px; }
 .inline-activity--changes { color: inherit; cursor: pointer; text-align: left; width: 100%; }
@@ -1476,7 +1499,8 @@ summary:focus-visible {
   .task-settings { align-items: stretch; flex-direction: column; gap: 6px; padding: 7px 10px; }
   .task-settings__controls { gap: 6px; }
   .task-setting { max-width: none; }
-  .composer-chip { max-width: 138px; }
+  .composer-chip { max-width: 106px; }
+  .composer-chip__label { font-size: 10.5px; }
   .review-button { justify-content: center; width: 100%; }
   .composer-control--cwd { max-width: none; min-width: 0; }
 }

@@ -1,6 +1,5 @@
 import {
   ArrowUp,
-  ChevronDown,
   FolderGit2,
   FolderOpen,
   Laptop,
@@ -156,28 +155,17 @@ export function Composer({
             disabled={disabled}
             effort={effort}
             efforts={efforts}
+            model={model}
+            models={models}
+            onModelChange={onModelChange}
             onSettingsChange={onSettingsChange}
             pending={pending}
             permissionProfile={permissionProfile}
             permissionProfiles={permissionProfiles}
             running={running}
+            showModel={showModel}
           />
           <span className="composer-toolbar-spacer" />
-          {showModel ? <label className="composer-control">
-            <span className="sr-only">Model</span>
-            <select
-              aria-label="Model"
-              onChange={(event) => onModelChange(event.target.value)}
-              value={model}
-            >
-              {models.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.displayName}
-                </option>
-              ))}
-            </select>
-            <ChevronDown aria-hidden="true" size={13} />
-          </label> : null}
           {running ? (
             <button aria-label="Stop" className="send-button send-button--stop" onClick={onInterrupt} type="button">
               <Square size={11} fill="currentColor" />

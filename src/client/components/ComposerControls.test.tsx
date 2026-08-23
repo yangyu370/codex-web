@@ -12,6 +12,11 @@ const efforts = [
   { id: "high", description: "Thorough" },
 ];
 
+const modelCatalog = [
+  { id: "gpt-5.6", displayName: "GPT-5.6", description: "Balanced flagship" },
+  { id: "fast", displayName: "Fast", description: "Quick responses" },
+];
+
 const profiles = [
   { id: ":read-only", description: "Server read-only description", allowed: true },
   { id: ":workspace", description: "Workspace access", allowed: true },
@@ -26,6 +31,8 @@ describe("ComposerControls", () => {
       <>
         <ComposerControls
           efforts={efforts}
+          models={modelCatalog}
+          onModelChange={() => undefined}
           effort="high"
           onSettingsChange={() => undefined}
           permissionProfile=":workspace"
@@ -33,6 +40,8 @@ describe("ComposerControls", () => {
         />
         <ComposerControls
           efforts={efforts}
+          models={modelCatalog}
+          onModelChange={() => undefined}
           effort="high"
           onSettingsChange={() => undefined}
           permissionProfile=":workspace"
@@ -72,6 +81,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={() => undefined}
         permissionProfile=":workspace"
@@ -89,6 +100,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="low"
         onSettingsChange={(change) => changes.push(change)}
         permissionProfile=":workspace"
@@ -101,7 +114,7 @@ describe("ComposerControls", () => {
 
     const menu = screen.getByRole("dialog", { name: "Reasoning effort" });
     expect(menu).not.toBeNull();
-    const options = menu.querySelectorAll(".composer-menu__option--effort");
+    const options = menu.querySelectorAll(".composer-menu__option--simple");
     expect(Array.from(options).map((option) => option.textContent)).toEqual(["Low", "High"]);
     expect(options[0]?.getAttribute("aria-pressed")).toBe("true");
     expect(options[0]?.getAttribute("title")).toBe("Fast");
@@ -117,6 +130,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="low"
         onSettingsChange={(change) => changes.push(change)}
         permissionProfile=":workspace"
@@ -147,6 +162,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={(change) => changes.push(change)}
         permissionProfile=":workspace"
@@ -169,6 +186,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={() => undefined}
         permissionProfile=":workspace"
@@ -189,6 +208,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={() => undefined}
         permissionProfile=":workspace"
@@ -211,6 +232,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={(change) => changes.push(change)}
         permissionProfile=":workspace"
@@ -231,6 +254,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={() => undefined}
         permissionProfile=":workspace"
@@ -255,6 +280,8 @@ describe("ComposerControls", () => {
       return <ComposerControls
         disabled={controlsDisabled}
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={(change) => changes.push(change)}
         permissionProfile=":workspace"
@@ -280,6 +307,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={(change) => changes.push(change)}
         permissionProfile=":workspace"
@@ -304,6 +333,8 @@ describe("ComposerControls", () => {
       const [settingPending, setSettingPending] = useState(false);
       return <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={(change) => {
           changes.push(change);
@@ -337,6 +368,8 @@ describe("ComposerControls", () => {
     render(
       <ComposerControls
         efforts={efforts}
+        models={modelCatalog}
+        onModelChange={() => undefined}
         effort="high"
         onSettingsChange={() => undefined}
         permissionProfile=":workspace"
@@ -351,11 +384,64 @@ describe("ComposerControls", () => {
       .toBe("Ask only when Codex detects a risky operation. · Applies from the next turn");
   });
 
+  test("shows the model display name on its chip and sends the selection through onModelChange", async () => {
+    const selections: string[] = [];
+    render(
+      <ComposerControls
+        efforts={efforts}
+        effort="high"
+        model="gpt-5.6"
+        models={modelCatalog}
+        onModelChange={(model) => selections.push(model)}
+        onSettingsChange={() => undefined}
+        permissionProfile=":workspace"
+        permissionProfiles={profiles}
+      />,
+    );
+    const user = userEvent.setup();
+
+    const chip = screen.getByRole("button", { name: "Model" });
+    expect(chip.textContent).toBe("GPT-5.6");
+    expect(chip.getAttribute("title")).toBe("Balanced flagship");
+
+    await user.click(chip);
+
+    const menu = screen.getByRole("dialog", { name: "Model" });
+    const options = menu.querySelectorAll(".composer-menu__option--simple");
+    expect(Array.from(options).map((option) => option.textContent)).toEqual(["GPT-5.6", "Fast"]);
+    expect(options[1]?.getAttribute("aria-pressed")).toBe("false");
+
+    await user.click(screen.getByRole("button", { name: "Fast" }));
+
+    expect(selections).toEqual(["fast"]);
+    expect(screen.queryByRole("dialog", { name: "Model" })).toBeNull();
+  });
+
+  test("hides the model chip when the composer manages the thread model elsewhere", () => {
+    render(
+      <ComposerControls
+        efforts={efforts}
+        effort="high"
+        models={modelCatalog}
+        onModelChange={() => undefined}
+        onSettingsChange={() => undefined}
+        permissionProfile=":workspace"
+        permissionProfiles={profiles}
+        showModel={false}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Model" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reasoning effort" }).textContent).toBe("High");
+  });
+
   test("preserves an authoritative reasoning effort not yet present in model metadata", () => {
     render(
       <ComposerControls
         efforts={[...efforts, { id: "ultra", description: "Current task value" }]}
         effort="ultra"
+        models={modelCatalog}
+        onModelChange={() => undefined}
         onSettingsChange={() => undefined}
         permissionProfile=":workspace"
         permissionProfiles={profiles}

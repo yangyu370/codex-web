@@ -1,4 +1,4 @@
-import { MessageSquareCode, PanelLeftClose, Plus, Search } from "lucide-react";
+import { ChevronDown, Folder, MessageSquareCode, PanelLeftClose, Plus, Search } from "lucide-react";
 
 import type { BrowserSnapshot, ThreadSummary } from "../../shared/protocol";
 import type { ConnectionStatus } from "../websocket";
@@ -12,6 +12,13 @@ interface ThreadSidebarProps {
   onSelect: (threadId: string) => void;
   connection: ConnectionStatus;
   service: BrowserSnapshot["service"];
+}
+
+interface DirectoryGroup {
+  cwd: string;
+  label: string;
+  threads: ThreadSummary[];
+  latestAt: number;
 }
 
 export function ThreadSidebar({
@@ -32,6 +39,8 @@ export function ThreadSidebar({
           .includes(normalized),
       )
     : threads;
+  const running = filtered.filter((thread) => isLive(thread, service));
+  const directories = groupByDirectory(filtered.filter((thread) => !isLive(thread, service)));
 
   return (
     <nav aria-label="Tasks" className="thread-sidebar">
@@ -62,12 +71,29 @@ export function ThreadSidebar({
           <p className="thread-list__empty">No tasks yet</p>
         ) : (
           <>
-            <ThreadGroup label="Running" threads={filtered.filter((thread) => isLive(thread, service))} selectedId={selectedId} onSelect={onSelect} live />
-            <ThreadGroup label="Recent" threads={filtered.filter((thread) => !isLive(thread, service))} selectedId={selectedId} onSelect={onSelect} />
+            <ThreadGroup label="Running" threads={running} selectedId={selectedId} onSelect={onSelect} live />
+            {directories.map((group) => (
+              <details className="thread-directory" key={group.cwd} open>
+                <summary className="thread-directory__header" title={group.cwd || undefined}>
+                  <Folder aria-hidden="true" size={12} />
+                  <span className="thread-directory__name">{group.label}</span>
+                  <span className="thread-directory__count">{group.threads.length}</span>
+                  <ChevronDown aria-hidden="true" className="thread-directory__chevron" size={12} />
+                </summary>
+                {group.threads.map((thread) => (
+                  <ThreadRow
+                    key={thread.id}
+                    onSelect={onSelect}
+                    selectedId={selectedId}
+                    thread={thread}
+                  />
+                ))}
+              </details>
+            ))}
           </>
         )}
       </div>
-      {service.platform === "macos" && (service.liveHandoff !== "available" || !filtered.some((thread) => isLive(thread, service))) ? (
+      {service.platform === "macos" && (service.liveHandoff !== "available" || running.length === 0) ? (
         <p className="handoff-hint">Start Web before CLI to make new CLI tasks available for live takeover.</p>
       ) : null}
       <div className="sidebar-footer">
@@ -85,6 +111,31 @@ export function ThreadSidebar({
   );
 }
 
+function groupByDirectory(threads: ThreadSummary[]): DirectoryGroup[] {
+  const groups = new Map<string, DirectoryGroup>();
+  for (const thread of threads) {
+    const cwd = thread.cwd?.trim() ?? "";
+    const group = groups.get(cwd) ?? { cwd, label: directoryLabel(cwd), threads: [], latestAt: 0 };
+    group.threads.push(thread);
+    group.latestAt = Math.max(group.latestAt, thread.updatedAt);
+    groups.set(cwd, group);
+  }
+  return Array.from(groups.values())
+    .map((group) => ({ ...group, threads: [...group.threads].sort(byLatestActivity) }))
+    .sort((a, b) => b.latestAt - a.latestAt);
+}
+
+function directoryLabel(cwd: string): string {
+  const trimmed = cwd.replace(/[\\/]+$/, "");
+  if (!trimmed) return "No directory";
+  const segments = trimmed.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] ?? trimmed;
+}
+
+function byLatestActivity(a: ThreadSummary, b: ThreadSummary): number {
+  return b.updatedAt - a.updatedAt;
+}
+
 function ThreadGroup({ label, threads, selectedId, onSelect, live = false }: {
   label: string;
   threads: ThreadSummary[];
@@ -95,12 +146,23 @@ function ThreadGroup({ label, threads, selectedId, onSelect, live = false }: {
   if (threads.length === 0 && label === "Running") return null;
   return <section className="thread-group" aria-label={label}>
     <div className="sidebar-section-label"><span>{label}</span><span>{threads.length}</span></div>
-    {threads.map((thread) => <button className="thread-row" data-active={thread.id === selectedId} key={thread.id} onClick={() => onSelect(thread.id)} type="button">
-      <span className="thread-row__title">{thread.title}{live ? <em>LIVE · CLI</em> : null}</span>
-      <span className="thread-row__preview">{thread.preview || thread.cwd}</span>
-      <span className="thread-row__time">{relativeTime(thread.updatedAt)}</span>
-    </button>)}
+    {threads.map((thread) => (
+      <ThreadRow key={thread.id} live={live} onSelect={onSelect} selectedId={selectedId} thread={thread} />
+    ))}
   </section>;
+}
+
+function ThreadRow({ thread, selectedId, onSelect, live = false }: {
+  thread: ThreadSummary;
+  selectedId?: string;
+  onSelect: (threadId: string) => void;
+  live?: boolean;
+}) {
+  return <button className="thread-row" data-active={thread.id === selectedId} key={thread.id} onClick={() => onSelect(thread.id)} type="button">
+    <span className="thread-row__title">{thread.title}{live ? <em>LIVE · CLI</em> : null}</span>
+    <span className="thread-row__preview">{thread.preview || thread.cwd}</span>
+    <span className="thread-row__time">{relativeTime(thread.updatedAt)}</span>
+  </button>;
 }
 
 function isLive(thread: ThreadSummary, service: BrowserSnapshot["service"]): boolean {

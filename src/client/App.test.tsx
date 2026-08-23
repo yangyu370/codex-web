@@ -41,9 +41,7 @@ describe("Codex web shell", () => {
       (screen.getByRole("textbox", { name: "Message Codex" }) as HTMLTextAreaElement)
         .disabled,
     ).toBe(false);
-    expect(
-      (screen.getByRole("combobox", { name: "Model" }) as HTMLSelectElement).value,
-    ).toBe("gpt-5.6");
+    expect(screen.getByRole("button", { name: "Model" }).textContent).toBe("GPT-5.6");
   });
 
   test("offers bounded recent native directories from non-secret settings", () => {

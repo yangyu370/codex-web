@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  BrainCircuit,
   Check,
   ChevronDown,
   CircleQuestionMark,
@@ -10,6 +11,7 @@ import {
 } from "lucide-react";
 
 import type {
+  ModelSummary,
   PermissionProfileSummary,
   ReasoningEffortOption,
 } from "../../shared/protocol";
@@ -17,13 +19,25 @@ import type {
 interface ComposerControlsProps {
   efforts: ReasoningEffortOption[];
   effort?: string;
+  models: ModelSummary[];
+  model?: string;
   permissionProfiles: PermissionProfileSummary[];
   permissionProfile?: string;
   disabled?: boolean;
   pending?: "effort" | "permissionProfile";
+  showModel?: boolean;
   running?: boolean;
+  onModelChange: (model: string) => void;
   onSettingsChange: (change: { effort?: string; permissionProfile?: string }) => void;
 }
+
+type MenuKind = "model" | "effort" | "permission";
+
+const menuWidths: Record<MenuKind, number> = {
+  model: 264,
+  effort: 168,
+  permission: 360,
+};
 
 interface PermissionPresentation {
   label: string;
@@ -110,22 +124,26 @@ function useMenuDismiss(
 export function ComposerControls({
   efforts,
   effort,
+  models,
+  model,
   permissionProfiles,
   permissionProfile,
   disabled = false,
   pending,
+  showModel = true,
   running = false,
+  onModelChange,
   onSettingsChange,
 }: ComposerControlsProps) {
-  const [openMenu, setOpenMenu] = useState<"effort" | "permission" | null>(null);
+  const [openMenu, setOpenMenu] = useState<MenuKind | null>(null);
   const [menuLayout, setMenuLayout] = useState<CSSProperties>();
 
-  // The composer sits at the bottom of the viewport, so both menus open upward
-  // and are clamped against the measured chip position to stay on screen.
-  const openMenuAt = (menu: "effort" | "permission", trigger: HTMLButtonElement) => {
+  // The composer sits at the bottom of the viewport, so every menu opens upward
+  // and is clamped against the measured chip position to stay on screen.
+  const openMenuAt = (menu: MenuKind, trigger: HTMLButtonElement) => {
     const rect = trigger.getBoundingClientRect();
     const margin = 8;
-    const width = Math.min(360, window.innerWidth - margin * 2);
+    const width = Math.min(menuWidths[menu], window.innerWidth - margin * 2);
     const viewportLeftBound = margin;
     const viewportRightBound = window.innerWidth - margin - width;
     const absoluteLeft = Math.min(rect.left, viewportRightBound);
@@ -136,6 +154,12 @@ export function ComposerControls({
     });
     setOpenMenu(menu);
   };
+
+  const modelMenuId = useId();
+  const modelOptionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const modelMenuOpen = openMenu === "model";
+  const modelNativeDisabled = disabled || models.length === 0;
+  const selectedModel = models.find((entry) => entry.id === model);
 
   const effortMenuId = useId();
   const effortOptionRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -153,10 +177,10 @@ export function ComposerControls({
   const permissionPending = pending === "permissionProfile";
   const permissionUnavailable = permissionNativeDisabled || permissionPending;
 
-  const closeEffortMenu = () => setOpenMenu((current) => current === "effort" ? null : current);
-  const closePermissionMenu = () => setOpenMenu((current) => current === "permission" ? null : current);
-  const effortMenu = useMenuDismiss(effortMenuOpen, closeEffortMenu);
-  const permissionMenu = useMenuDismiss(permissionMenuOpen, closePermissionMenu);
+  const closeMenu = (menu: MenuKind) => setOpenMenu((current) => current === menu ? null : current);
+  const modelMenu = useMenuDismiss(modelMenuOpen, () => closeMenu("model"));
+  const effortMenu = useMenuDismiss(effortMenuOpen, () => closeMenu("effort"));
+  const permissionMenu = useMenuDismiss(permissionMenuOpen, () => closeMenu("permission"));
 
   const selectedEffortEntry = efforts.find((entry) => entry.id === effort);
   const effortTitle = (selectedEffortEntry?.description ?? "Choose how hard Codex thinks about this task")
@@ -174,10 +198,19 @@ export function ComposerControls({
     + (running ? runningSuffix : "");
 
   useEffect(() => {
-    if (openMenu && (openMenu === "effort" ? effortUnavailable : permissionUnavailable)) {
+    if (!openMenu) return;
+    if (openMenu === "effort" ? effortUnavailable : openMenu === "permission" ? permissionUnavailable : modelNativeDisabled) {
       setOpenMenu(null);
     }
-  }, [openMenu, effortUnavailable, permissionUnavailable]);
+  }, [openMenu, effortUnavailable, permissionUnavailable, modelNativeDisabled]);
+
+  useEffect(() => {
+    if (!modelMenuOpen) {
+      modelOptionRefs.current.clear();
+      return;
+    }
+    modelOptionRefs.current.get(model ?? "")?.focus();
+  }, [modelMenuOpen]);
 
   useEffect(() => {
     if (!effortMenuOpen) {
@@ -198,6 +231,17 @@ export function ComposerControls({
     permissionOptionRefs.current.get(initialProfile?.id ?? "")?.focus();
   }, [permissionMenuOpen]);
 
+  const selectModel = (id: string) => {
+    if (modelNativeDisabled || id === model) {
+      setOpenMenu(null);
+      modelMenu.triggerRef.current?.focus();
+      return;
+    }
+    onModelChange(id);
+    setOpenMenu(null);
+    modelMenu.triggerRef.current?.focus();
+  };
+
   const selectEffort = (id: string) => {
     if (effortUnavailable) return;
     onSettingsChange({ effort: id });
@@ -214,58 +258,49 @@ export function ComposerControls({
 
   return (
     <div className="composer-controls" aria-label="Task controls">
-      <div className="composer-menu-anchor">
-        <button
-          aria-controls={effortMenuOpen ? effortMenuId : undefined}
-          aria-expanded={effortMenuOpen}
-          aria-haspopup="dialog"
-          aria-label="Reasoning effort"
-          className="composer-chip"
-          data-pending={effortPending || undefined}
-          disabled={effortNativeDisabled}
-          onClick={(event) => {
-            if (effortUnavailable) return;
-            if (effortMenuOpen) setOpenMenu(null);
-            else openMenuAt("effort", event.currentTarget);
+      {showModel ? (
+        <Chip
+          ariaControls={modelMenuOpen ? modelMenuId : undefined}
+          ariaExpanded={modelMenuOpen}
+          ariaLabel="Model"
+          disabled={modelNativeDisabled}
+          icon={<BrainCircuit aria-hidden="true" size={14} />}
+          label={selectedModel?.displayName ?? "Model"}
+          menuId={modelMenuId}
+          onOpen={(trigger) => {
+            if (modelNativeDisabled) return;
+            if (modelMenuOpen) setOpenMenu(null);
+            else openMenuAt("model", trigger);
           }}
-          ref={effortMenu.triggerRef}
-          title={effortTitle}
-          type="button"
+          open={modelMenuOpen}
+          title={selectedModel?.description ?? selectedModel?.displayName ?? "Select the model for this task"}
+          triggerRef={modelMenu.triggerRef}
         >
-          <Gauge aria-hidden="true" size={14} />
-          <span className="composer-chip__label">
-            {effort ? effortLabel(effort) : "Effort"}
-          </span>
-          <ChevronDown aria-hidden="true" className="composer-chip__chevron" size={13} />
-        </button>
-        {effortMenuOpen ? (
-          <div
-            aria-label="Reasoning effort"
-            className="composer-menu composer-menu--effort"
-            id={effortMenuId}
+          <MenuShell
+            ariaLabel="Model"
+            id={modelMenuId}
+            menuRef={modelMenu.menuRef}
             style={menuLayout}
-            ref={effortMenu.menuRef}
-            role="dialog"
           >
             <div className="composer-menu__options">
-              {efforts.map((entry) => {
-                const selected = entry.id === effort;
+              {models.map((entry) => {
+                const selected = entry.id === model;
                 return (
                   <button
-                    aria-label={effortLabel(entry.id)}
+                    aria-label={entry.displayName}
                     aria-pressed={selected}
-                    className="composer-menu__option composer-menu__option--effort"
-                    disabled={effortUnavailable}
+                    className="composer-menu__option composer-menu__option--simple"
+                    disabled={modelNativeDisabled}
                     key={entry.id}
-                    onClick={() => selectEffort(entry.id)}
+                    onClick={() => selectModel(entry.id)}
                     ref={(element) => {
-                      if (element) effortOptionRefs.current.set(entry.id, element);
-                      else effortOptionRefs.current.delete(entry.id);
+                      if (element) modelOptionRefs.current.set(entry.id, element);
+                      else modelOptionRefs.current.delete(entry.id);
                     }}
-                    title={entry.description}
+                    title={entry.description ?? entry.displayName}
                     type="button"
                   >
-                    <span className="composer-menu__option-label">{effortLabel(entry.id)}</span>
+                    <span className="composer-menu__option-label">{entry.displayName}</span>
                     {selected ? (
                       <span aria-hidden="true" className="composer-menu__option-marker">
                         <Check size={15} strokeWidth={2.2} />
@@ -275,92 +310,227 @@ export function ComposerControls({
                 );
               })}
             </div>
-          </div>
-        ) : null}
-      </div>
-      <div className="composer-menu-anchor">
-        <button
-          aria-controls={permissionMenuOpen ? permissionMenuId : undefined}
-          aria-describedby={permissionActiveModeId}
-          aria-disabled={permissionPending || undefined}
-          aria-expanded={permissionMenuOpen}
-          aria-haspopup="dialog"
-          aria-label="Permissions"
-          className="composer-chip"
-          data-pending={permissionPending || undefined}
-          disabled={permissionNativeDisabled}
-          onClick={(event) => {
-            if (permissionUnavailable) return;
-            if (permissionMenuOpen) setOpenMenu(null);
-            else openMenuAt("permission", event.currentTarget);
-          }}
-          ref={permissionMenu.triggerRef}
-          title={permissionTitle}
-          type="button"
+          </MenuShell>
+        </Chip>
+      ) : null}
+      <Chip
+        ariaControls={effortMenuOpen ? effortMenuId : undefined}
+        ariaExpanded={effortMenuOpen}
+        ariaLabel="Reasoning effort"
+        dataPending={effortPending || undefined}
+        disabled={effortNativeDisabled}
+        icon={<Gauge aria-hidden="true" size={14} />}
+        label={effort ? effortLabel(effort) : "Effort"}
+        menuId={effortMenuId}
+        onOpen={(trigger) => {
+          if (effortUnavailable) return;
+          if (effortMenuOpen) setOpenMenu(null);
+          else openMenuAt("effort", trigger);
+        }}
+        open={effortMenuOpen}
+        title={effortTitle}
+        triggerRef={effortMenu.triggerRef}
+      >
+        <MenuShell
+          ariaLabel="Reasoning effort"
+          id={effortMenuId}
+          menuRef={effortMenu.menuRef}
+          style={menuLayout}
         >
-          <span className="composer-chip__icon">
-            <PermissionProfileIcon profileId={permissionProfile ?? ""} />
-          </span>
-          <span className="composer-chip__label" id={permissionActiveModeId}>
-            {selectedPermissionPresentation?.label ?? "Select profile"}
-          </span>
-          <ChevronDown aria-hidden="true" className="composer-chip__chevron" size={13} />
-        </button>
-        {permissionMenuOpen ? (
-          <div
-            aria-labelledby={permissionHeadingId}
-            className="composer-menu composer-menu--permission"
-            id={permissionMenuId}
-            style={menuLayout}
-            ref={permissionMenu.menuRef}
-            role="dialog"
-          >
-            <h2 className="composer-menu__heading" id={permissionHeadingId}>How should Codex run?</h2>
-            <div className="composer-menu__options">
-              {permissionProfiles.map((profile, index) => {
-                const presentation = permissionPresentation(profile);
-                const descriptionId = `${permissionMenuId}-description-${index}`;
-                const selected = profile.id === permissionProfile;
-                return (
-                  <button
-                    aria-describedby={presentation.description ? descriptionId : undefined}
-                    aria-label={presentation.label}
-                    aria-pressed={selected}
-                    className="composer-menu__option"
-                    data-profile-id={profile.id}
-                    disabled={permissionUnavailable || !profile.allowed}
-                    key={profile.id}
-                    onClick={() => selectPermission(profile)}
-                    ref={(element) => {
-                      if (element) permissionOptionRefs.current.set(profile.id, element);
-                      else permissionOptionRefs.current.delete(profile.id);
-                    }}
-                    title={profile.description}
-                    type="button"
-                  >
-                    <span className="composer-menu__option-icon">
-                      <PermissionProfileIcon profileId={profile.id} />
+          <div className="composer-menu__options">
+            {efforts.map((entry) => {
+              const selected = entry.id === effort;
+              return (
+                <button
+                  aria-label={effortLabel(entry.id)}
+                  aria-pressed={selected}
+                  className="composer-menu__option composer-menu__option--simple"
+                  disabled={effortUnavailable}
+                  key={entry.id}
+                  onClick={() => selectEffort(entry.id)}
+                  ref={(element) => {
+                    if (element) effortOptionRefs.current.set(entry.id, element);
+                    else effortOptionRefs.current.delete(entry.id);
+                  }}
+                  title={entry.description}
+                  type="button"
+                >
+                  <span className="composer-menu__option-label">{effortLabel(entry.id)}</span>
+                  {selected ? (
+                    <span aria-hidden="true" className="composer-menu__option-marker">
+                      <Check size={15} strokeWidth={2.2} />
                     </span>
-                    <span className="composer-menu__option-copy">
-                      <span className="composer-menu__option-title">{presentation.label}</span>
-                      {presentation.description ? (
-                        <span className="composer-menu__option-description" id={descriptionId}>
-                          {presentation.description}
-                        </span>
-                      ) : null}
-                    </span>
-                    {selected ? (
-                      <span aria-hidden="true" className="composer-menu__option-marker">
-                        <Check size={15} strokeWidth={2.2} />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </MenuShell>
+      </Chip>
+      <Chip
+        ariaControls={permissionMenuOpen ? permissionMenuId : undefined}
+        ariaDescribedBy={permissionActiveModeId}
+        ariaDisabled={permissionPending || undefined}
+        ariaExpanded={permissionMenuOpen}
+        ariaLabel="Permissions"
+        dataPending={permissionPending || undefined}
+        disabled={permissionNativeDisabled}
+        icon={<PermissionProfileIcon profileId={permissionProfile ?? ""} />}
+        label={selectedPermissionPresentation?.label ?? "Select profile"}
+        labelId={permissionActiveModeId}
+        menuId={permissionMenuId}
+        onOpen={(trigger) => {
+          if (permissionUnavailable) return;
+          if (permissionMenuOpen) setOpenMenu(null);
+          else openMenuAt("permission", trigger);
+        }}
+        open={permissionMenuOpen}
+        title={permissionTitle}
+        triggerRef={permissionMenu.triggerRef}
+      >
+        <MenuShell
+          ariaLabelledBy={permissionHeadingId}
+          id={permissionMenuId}
+          menuRef={permissionMenu.menuRef}
+          style={menuLayout}
+        >
+          <h2 className="composer-menu__heading" id={permissionHeadingId}>How should Codex run?</h2>
+          <div className="composer-menu__options">
+            {permissionProfiles.map((profile, index) => {
+              const presentation = permissionPresentation(profile);
+              const descriptionId = `${permissionMenuId}-description-${index}`;
+              const selected = profile.id === permissionProfile;
+              return (
+                <button
+                  aria-describedby={presentation.description ? descriptionId : undefined}
+                  aria-label={presentation.label}
+                  aria-pressed={selected}
+                  className="composer-menu__option"
+                  data-profile-id={profile.id}
+                  disabled={permissionUnavailable || !profile.allowed}
+                  key={profile.id}
+                  onClick={() => selectPermission(profile)}
+                  ref={(element) => {
+                    if (element) permissionOptionRefs.current.set(profile.id, element);
+                    else permissionOptionRefs.current.delete(profile.id);
+                  }}
+                  title={profile.description}
+                  type="button"
+                >
+                  <span className="composer-menu__option-icon">
+                    <PermissionProfileIcon profileId={profile.id} />
+                  </span>
+                  <span className="composer-menu__option-copy">
+                    <span className="composer-menu__option-title">{presentation.label}</span>
+                    {presentation.description ? (
+                      <span className="composer-menu__option-description" id={descriptionId}>
+                        {presentation.description}
                       </span>
                     ) : null}
-                  </button>
-                );
-              })}
-            </div>
+                  </span>
+                  {selected ? (
+                    <span aria-hidden="true" className="composer-menu__option-marker">
+                      <Check size={15} strokeWidth={2.2} />
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
           </div>
-        ) : null}
-      </div>
+        </MenuShell>
+      </Chip>
+    </div>
+  );
+}
+
+interface ChipProps {
+  ariaControls?: string;
+  ariaDescribedBy?: string;
+  ariaDisabled?: boolean;
+  ariaExpanded: boolean;
+  ariaLabel: string;
+  dataPending?: boolean;
+  disabled?: boolean;
+  icon: ReactNode;
+  label: string;
+  labelId?: string;
+  menuId: string;
+  onOpen: (trigger: HTMLButtonElement) => void;
+  open: boolean;
+  title: string;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  children: ReactNode;
+}
+
+function Chip({
+  ariaControls,
+  ariaDescribedBy,
+  ariaDisabled,
+  ariaExpanded,
+  ariaLabel,
+  dataPending,
+  disabled,
+  icon,
+  label,
+  labelId,
+  onOpen,
+  open,
+  title,
+  triggerRef,
+  children,
+}: ChipProps) {
+  return (
+    <div className="composer-menu-anchor">
+      <button
+        aria-controls={ariaControls}
+        aria-describedby={ariaDescribedBy}
+        aria-disabled={ariaDisabled}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={ariaLabel}
+        className="composer-chip"
+        data-pending={dataPending || undefined}
+        disabled={disabled}
+        onClick={(event) => onOpen(event.currentTarget)}
+        ref={triggerRef}
+        title={title}
+        type="button"
+      >
+        {icon}
+        <span className="composer-chip__label" id={labelId}>{label}</span>
+        <ChevronDown aria-hidden="true" className="composer-chip__chevron" size={13} />
+      </button>
+      {open ? children : null}
+    </div>
+  );
+}
+
+function MenuShell({
+  ariaLabel,
+  ariaLabelledBy,
+  id,
+  menuRef,
+  style,
+  children,
+}: {
+  ariaLabel?: string;
+  ariaLabelledBy?: string;
+  id: string;
+  menuRef: React.RefObject<HTMLDivElement | null>;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledBy}
+      className="composer-menu"
+      id={id}
+      ref={menuRef}
+      role="dialog"
+      style={style}
+    >
+      {children}
     </div>
   );
 }
