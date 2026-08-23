@@ -5,6 +5,17 @@ import { join } from "node:path";
 
 async function selectWorkspacePermissions(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Permissions" }).click();
+  const dialog = page.getByRole("dialog", { name: "How should Codex run?" });
+  await expect(dialog).toBeVisible();
+  const box = await dialog.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  if (!box || !viewport) throw new Error("Permission menu geometry was unavailable");
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
   await page.getByRole("button", { name: "Approve when needed" }).click();
 }
 
