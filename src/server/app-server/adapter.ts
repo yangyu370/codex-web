@@ -33,6 +33,10 @@ export type NativeTurnInput =
   | { type: "text"; text: string }
   | { type: "localImage"; path: string };
 
+// Turns are fetched newest-first in pages; larger pages cut sequential
+// round trips when loading long sessions (the 500-item cap still bounds work).
+const RESUME_PAGE_LIMIT = 50;
+
 export class CodexAdapter {
   readonly #rpc: RpcClient;
   readonly #state: WebState;
@@ -122,11 +126,12 @@ export class CodexAdapter {
   async resumeThread(
     threadId: string,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
+    const startedAt = Date.now();
     try {
       const response = record(await this.#request("thread/resume", {
         threadId,
         excludeTurns: true,
-        initialTurnsPage: { limit: 10, sortDirection: "desc", itemsView: "full" },
+        initialTurnsPage: { limit: RESUME_PAGE_LIMIT, sortDirection: "desc", itemsView: "full" },
       }), "thread/resume response");
       const rawThread = record(response.thread, "thread/resume response.thread");
       const decoded = decodeThreadEnvelope({ thread: rawThread });
@@ -147,12 +152,15 @@ export class CodexAdapter {
         pageValue = await this.#request("thread/turns/list", {
           threadId,
           cursor,
-          limit: 10,
+          limit: RESUME_PAGE_LIMIT,
           sortDirection: "desc",
           itemsView: "full",
         });
         pages += 1;
       }
+      this.#state.addDiagnostic(
+        `resume ${threadId}: pages=${pages + 1} items=${items.length} totalMs=${Date.now() - startedAt}`,
+      );
       this.#state.upsertThread(decoded.thread);
       this.#state.loadThread(decoded.thread.id, items, activeTurn);
       const runtime = decodeThreadEnvelope(response).settings;

@@ -1,4 +1,5 @@
 import {
+  encodeServerMessage,
   type BrowserEvent,
   type BrowserRequest,
   type BrowserResponse,
@@ -41,7 +42,7 @@ export interface BrowserGatewayOptions {
   onConnectionCountChanged?: (count: number) => void;
 }
 
-type Send = (message: ServerMessage) => void;
+type Send = (message: ServerMessage, encoded?: string) => void;
 
 export class BrowserGateway {
   readonly #state: WebState;
@@ -50,7 +51,7 @@ export class BrowserGateway {
   readonly #maxBytes: number;
   readonly #onConnectionCountChanged?: (count: number) => void;
   readonly #connections = new Set<Send>();
-  readonly #events: Array<{ event: BrowserEvent; bytes: number }> = [];
+  readonly #events: Array<{ event: BrowserEvent; encoded: string; sequence: number; bytes: number }> = [];
   readonly #reviewRequests = new Set<string>();
   #eventBytes = 0;
 
@@ -73,7 +74,7 @@ export class BrowserGateway {
     if (afterSequence === undefined) {
       send(this.#state.snapshot());
     } else {
-      const earliest = this.#events[0]?.event.sequence;
+      const earliest = this.#events[0]?.sequence;
       const current = this.#state.snapshot().sequence;
       if (
         afterSequence > current ||
@@ -83,8 +84,8 @@ export class BrowserGateway {
         send(this.#state.snapshot());
       } else {
         for (const entry of this.#events) {
-          if (entry.event.sequence > afterSequence) {
-            send(structuredClone(entry.event));
+          if (entry.sequence > afterSequence) {
+            send(entry.event, entry.encoded);
           }
         }
       }
@@ -229,9 +230,12 @@ export class BrowserGateway {
   }
 
   #recordEvent(event: BrowserEvent): void {
-    const bytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
+    // Events can reach megabytes on thread loads, so encode once and reuse
+    // the same string for byte accounting, replay, and every live socket.
+    const encoded = encodeServerMessage(event);
+    const bytes = Buffer.byteLength(encoded, "utf8");
     if (bytes <= this.#maxBytes) {
-      this.#events.push({ event: structuredClone(event), bytes });
+      this.#events.push({ event, encoded, sequence: event.sequence, bytes });
       this.#eventBytes += bytes;
       while (
         this.#events.length > this.#maxEvents ||
@@ -245,7 +249,7 @@ export class BrowserGateway {
       this.#eventBytes = 0;
     }
     for (const connection of this.#connections) {
-      connection(structuredClone(event));
+      connection(event, encoded);
     }
   }
 }

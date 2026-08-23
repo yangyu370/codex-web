@@ -290,7 +290,7 @@ export function createWebSocketLifecycle(gateway: BrowserGateway): {
     open(socket) {
       const deviceId = crypto.randomUUID();
       const disconnect = gateway.connect(
-        (message) => socket.send(encodeServerMessage(message)),
+        (message, encoded) => socket.send(encoded ?? encodeServerMessage(message)),
         socket.data.afterSequence,
       );
       connections.set(socket, { disconnect, deviceId });

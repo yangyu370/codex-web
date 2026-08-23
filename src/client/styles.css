@@ -488,6 +488,32 @@ summary:focus-visible {
   scroll-behavior: smooth;
 }
 
+.conversation-preview {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-faint);
+  display: flex;
+  font-size: 11px;
+  gap: 8px;
+  margin: 0 auto 10px;
+  max-width: 760px;
+  min-height: 30px;
+  overflow: hidden;
+  padding: 4px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.conversation-preview:hover { background: var(--panel); color: var(--text-muted); }
+.conversation-preview__icon { align-items: center; display: inline-flex; flex: 0 0 auto; }
+.conversation-preview__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message {
   animation: item-in 180ms ease both;
   margin: 0 auto 28px;

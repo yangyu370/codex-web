@@ -632,8 +632,10 @@ export class WebState {
   #emit(type: string, payload: unknown): void {
     this.#sequence += 1;
     const event: BrowserEvent = { kind: "event", sequence: this.#sequence, type, payload };
+    // Events are fresh per emit and consumed synchronously; listeners treat
+    // them as read-only, so they are dispatched without per-listener clones.
     for (const listener of this.#listeners) {
-      listener(structuredClone(event));
+      listener(event);
     }
   }
 }

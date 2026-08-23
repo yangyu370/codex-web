@@ -966,7 +966,7 @@ describe("CodexAdapter", () => {
       {
         threadId: "t1",
         excludeTurns: true,
-        initialTurnsPage: { limit: 10, sortDirection: "desc", itemsView: "full" },
+        initialTurnsPage: { limit: 50, sortDirection: "desc", itemsView: "full" },
       },
     );
     const state = new WebState("macos");
