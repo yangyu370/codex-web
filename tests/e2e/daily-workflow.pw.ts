@@ -1,7 +1,14 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+async function selectWorkspacePermissions(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Permissions" }).click();
+  const option = page.getByRole("button", { name: "Approve when needed" });
+  await option.focus();
+  await page.keyboard.press("Enter");
+}
 
 test("keeps the composer in the initial viewport with a long task history", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === "mobile", "Desktop grid regression");
@@ -135,7 +142,7 @@ test("changes task controls and reviews a structured diff inline", async ({ page
   await page.getByRole("button", { name: "New task" }).click();
   await page.getByRole("combobox", { name: "Working directory" }).fill(process.cwd());
   await page.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");
-  await page.getByRole("combobox", { name: "Permission profile" }).selectOption(":workspace");
+  await selectWorkspacePermissions(page);
   await page.getByRole("textbox", { name: "Message Codex" }).fill("Create a file to review");
   await page.getByRole("button", { name: "Send" }).click();
 
@@ -150,7 +157,7 @@ test("changes task controls and reviews a structured diff inline", async ({ page
     await page.getByRole("button", { name: "Chat" }).click();
   }
   await page.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");
-  await page.getByRole("combobox", { name: "Permission profile" }).selectOption(":workspace");
+  await selectWorkspacePermissions(page);
   await page.getByRole("button", { name: "Review changes" }).click();
 
   const changes = page.getByLabel("Changes");

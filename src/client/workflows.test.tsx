@@ -375,7 +375,8 @@ describe("live client workflows", () => {
     expect(effortRequest).toMatchObject({ method: "thread.settings.update", params: { threadId: "cli-1", effort: "high" } });
     await act(async () => { socket.receive({ kind: "response", id: effortRequest.id, result: {} }); await Bun.sleep(0); });
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "Permission profile" }), ":workspace");
+    await user.click(screen.getByRole("button", { name: "Permissions" }));
+    await user.click(screen.getByRole("button", { name: "Approve when needed" }));
     const permissionRequest = JSON.parse(socket.sent.at(-1) ?? "null");
     expect(permissionRequest).toMatchObject({ method: "thread.settings.update", params: { threadId: "cli-1", permissionProfile: ":workspace" } });
     await act(async () => { socket.receive({ kind: "response", id: permissionRequest.id, result: {} }); await Bun.sleep(0); });
