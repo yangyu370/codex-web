@@ -25,12 +25,14 @@ const models = [
 ];
 
 const profiles = [
+  { id: ":read-only", description: "Server read-only description", allowed: true },
   { id: ":workspace", description: "Workspace access", allowed: true },
+  { id: ":danger-full-access", description: "Server full access description", allowed: true },
   { id: ":blocked", description: "Managed policy blocks this profile", allowed: false },
 ];
 
 describe("TaskSettings", () => {
-  test("selects allowed profiles and efforts while explaining blocked profiles", async () => {
+  test("opens the permissions menu with friendly names and sends the native full-access profile id", async () => {
     const changes: unknown[] = [];
     render(
       <TaskSettings
@@ -46,16 +48,65 @@ describe("TaskSettings", () => {
     );
     const user = userEvent.setup();
 
-    await user.selectOptions(screen.getByLabelText("Permission profile"), ":workspace");
+    await user.click(screen.getByRole("button", { name: "Permissions" }));
+
+    expect(screen.getByRole("dialog", { name: "How should Codex run?" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Ask for approval" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Approve when needed" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Full access" })).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Full access" }));
     await user.selectOptions(screen.getByLabelText("Reasoning effort"), "high");
 
     expect(changes).toEqual([
-      { permissionProfile: ":workspace" },
+      { permissionProfile: ":danger-full-access" },
       { effort: "high" },
     ]);
-    const blocked = document.querySelector('option[value=":blocked"]') as HTMLOptionElement;
+  });
+
+  test("keeps disallowed profiles disabled and does not select them", async () => {
+    const changes: unknown[] = [];
+    render(
+      <TaskSettings
+        model="gpt-5.6"
+        models={models}
+        onReview={() => undefined}
+        onSettingsChange={(change) => changes.push(change)}
+        permissionProfile=":workspace"
+        permissionProfiles={profiles}
+      />,
+    );
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Permissions" }));
+
+    const blocked = screen.getByRole("button", { name: ":blocked" }) as HTMLButtonElement;
     expect(blocked.disabled).toBe(true);
-    expect(blocked.textContent).toContain("Managed policy blocks this profile");
+    expect(screen.getByText("Managed policy blocks this profile")).not.toBeNull();
+    await user.click(blocked);
+
+    expect(changes).toEqual([]);
+  });
+
+  test("dismisses the open permissions menu with Escape and restores trigger focus", async () => {
+    render(
+      <TaskSettings
+        model="gpt-5.6"
+        models={models}
+        onReview={() => undefined}
+        onSettingsChange={() => undefined}
+        permissionProfile=":workspace"
+        permissionProfiles={profiles}
+      />,
+    );
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", { name: "Permissions" });
+
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "How should Codex run?" })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 
   test("moves to the selected model default when the current effort is unsupported", async () => {
