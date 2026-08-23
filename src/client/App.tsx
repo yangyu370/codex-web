@@ -111,6 +111,14 @@ export function App({
   const effectiveModel = loadedSettings?.model ?? model;
   const effectiveEffort = loadedSettings?.effort ?? effort;
   const effectivePermissionProfile = loadedSettings?.permissionProfile?.id ?? permissionProfile;
+  const effectiveModelEntry = visibleSnapshot.models.find((entry) => entry.id === effectiveModel);
+  const catalogEfforts = effectiveModelEntry?.supportedReasoningEfforts ?? [];
+  const effortOptions = effectiveEffort && !catalogEfforts.some((entry) => entry.id === effectiveEffort)
+    ? [...catalogEfforts, { id: effectiveEffort, description: "Current task value" }]
+    : catalogEfforts;
+  const effectiveEffortSelection = effortOptions.some((entry) => entry.id === effectiveEffort)
+    ? effectiveEffort
+    : effectiveModelEntry?.defaultReasoningEffort ?? effortOptions[0]?.id;
   const historyOnly = Boolean(visibleSnapshot.loadedThreadId) && thread?.canAcceptDirectInput !== true;
 
   useEffect(() => {
@@ -476,22 +484,21 @@ export function App({
           threadTitle={thread?.title}
           controls={<TaskSettings
             disabled={visibleSnapshot.service.status !== "ready" || historyOnly}
-            effort={effectiveEffort}
             model={effectiveModel}
             models={visibleSnapshot.models}
-            onModelChange={(nextModel, nextEffort) => {
+            onModelChange={(nextModel) => {
               setModel(nextModel);
+              const entry = visibleSnapshot.models.find((candidate) => candidate.id === nextModel);
+              const supported = entry?.supportedReasoningEfforts ?? [];
+              const nextEffort = supported.some((candidate) => candidate.id === effectiveEffort)
+                ? effectiveEffort
+                : entry?.defaultReasoningEffort ?? supported[0]?.id;
               if (nextEffort) setEffort(nextEffort);
             }}
             onReview={() => void startReview()}
-            onSettingsChange={(change) => void updateTaskSettings(change)}
-            pending={pendingSetting?.field}
-            permissionProfile={effectivePermissionProfile}
-            permissionProfiles={visibleSnapshot.permissionProfiles ?? []}
             reviewDisabledReason={reviewDisabledReason}
             reviewEnabled={reviewEnabled}
             reviewRunning={reviewRunning}
-            running={running}
             showModel={Boolean(visibleSnapshot.loadedThreadId)}
           />}
         />
@@ -513,6 +520,11 @@ export function App({
             disabled={visibleSnapshot.service.status !== "ready" || historyOnly}
             model={model}
             models={visibleSnapshot.models}
+            efforts={effortOptions}
+            effort={effectiveEffortSelection}
+            permissionProfiles={visibleSnapshot.permissionProfiles ?? []}
+            permissionProfile={effectivePermissionProfile}
+            pending={pendingSetting?.field}
             showModel={!visibleSnapshot.loadedThreadId}
             recentDirectories={settings.recentDirectories}
             attachments={draftAttachments}
@@ -522,6 +534,7 @@ export function App({
             onFilesSelected={(files) => void addAttachmentFiles(files)}
             onInterrupt={interrupt}
             onModelChange={setModel}
+            onSettingsChange={(change) => void updateTaskSettings(change)}
             onRemoveAttachment={(attachment) => void removeAttachment(attachment)}
             onSend={() => void send()}
             onValueChange={setDraft}

@@ -210,7 +210,7 @@ describe("Codex web shell", () => {
     }} />);
 
     expect((screen.getByRole("textbox", { name: "Message Codex" }) as HTMLTextAreaElement).disabled).toBe(true);
-    expect((screen.getByRole("combobox", { name: "Reasoning effort" }) as HTMLSelectElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Reasoning effort" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Review changes" }) as HTMLButtonElement).title).toBe("This task is available as history only");
   });
 });

@@ -3,6 +3,14 @@ import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+async function selectReasoningEffort(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Reasoning effort" }).click();
+  const dialog = page.getByRole("dialog", { name: "Reasoning effort" });
+  await expect(dialog).toBeVisible();
+  await page.getByRole("button", { name: "High", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+}
+
 async function selectWorkspacePermissions(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Permissions" }).click();
   const dialog = page.getByRole("dialog", { name: "How should Codex run?" });
@@ -36,7 +44,7 @@ test("keeps a large permissions catalog reachable inside a short viewport", asyn
 
   const geometry = await dialog.evaluate((element) => {
     const box = element.getBoundingClientRect();
-    const lastBox = element.querySelector(".permission-profile-option:last-child")?.getBoundingClientRect();
+    const lastBox = element.querySelector(".composer-menu__option:last-child")?.getBoundingClientRect();
     return {
       bottom: box.bottom,
       clientHeight: element.clientHeight,
@@ -190,7 +198,7 @@ test("changes task controls and reviews a structured diff inline", async ({ page
   }
   await page.getByRole("button", { name: "New task" }).click();
   await page.getByRole("combobox", { name: "Working directory" }).fill(process.cwd());
-  await page.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");
+  await selectReasoningEffort(page);
   await selectWorkspacePermissions(page);
   await page.getByRole("textbox", { name: "Message Codex" }).fill("Create a file to review");
   await page.getByRole("button", { name: "Send" }).click();
@@ -205,7 +213,7 @@ test("changes task controls and reviews a structured diff inline", async ({ page
   if (testInfo.project.name !== "desktop") {
     await page.getByRole("button", { name: "Chat" }).click();
   }
-  await page.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");
+  await selectReasoningEffort(page);
   await selectWorkspacePermissions(page);
   await page.getByRole("button", { name: "Review changes" }).click();
 

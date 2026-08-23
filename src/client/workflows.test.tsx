@@ -370,7 +370,8 @@ describe("live client workflows", () => {
     const user = userEvent.setup();
 
     expect(screen.getByText("LIVE · CLI")).not.toBeNull();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Reasoning effort" }), "high");
+    await user.click(screen.getByRole("button", { name: "Reasoning effort" }));
+    await user.click(screen.getByRole("button", { name: "High" }));
     const effortRequest = JSON.parse(socket.sent.at(-1) ?? "null");
     expect(effortRequest).toMatchObject({ method: "thread.settings.update", params: { threadId: "cli-1", effort: "high" } });
     await act(async () => { socket.receive({ kind: "response", id: effortRequest.id, result: {} }); await Bun.sleep(0); });

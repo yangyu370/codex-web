@@ -5,20 +5,29 @@ import {
   FolderOpen,
   Laptop,
   Paperclip,
-  ShieldCheck,
   Square,
 } from "lucide-react";
 import { useRef } from "react";
 
-import type { ModelSummary } from "../../shared/protocol";
+import type {
+  ModelSummary,
+  PermissionProfileSummary,
+  ReasoningEffortOption,
+} from "../../shared/protocol";
 import type { DraftAttachment } from "../attachments";
 import { AttachmentList } from "./AttachmentList";
+import { ComposerControls } from "./ComposerControls";
 
 interface ComposerProps {
   value: string;
   cwd: string;
   model: string;
   models: ModelSummary[];
+  efforts: ReasoningEffortOption[];
+  effort?: string;
+  permissionProfiles: PermissionProfileSummary[];
+  permissionProfile?: string;
+  pending?: "effort" | "permissionProfile";
   showModel?: boolean;
   recentDirectories?: string[];
   running: boolean;
@@ -29,6 +38,7 @@ interface ComposerProps {
   onCwdChange: (cwd: string) => void;
   onBrowseDirectory?: () => void;
   onModelChange: (model: string) => void;
+  onSettingsChange: (change: { effort?: string; permissionProfile?: string }) => void;
   onSend: () => void;
   onInterrupt: () => void;
   onFilesSelected?: (files: File[]) => void;
@@ -40,6 +50,11 @@ export function Composer({
   cwd,
   model,
   models,
+  efforts,
+  effort,
+  permissionProfiles,
+  permissionProfile,
+  pending,
   showModel = true,
   recentDirectories = [],
   running,
@@ -50,6 +65,7 @@ export function Composer({
   onCwdChange,
   onBrowseDirectory,
   onModelChange,
+  onSettingsChange,
   onSend,
   onInterrupt,
   onFilesSelected,
@@ -136,21 +152,16 @@ export function Composer({
           >
             <Paperclip size={15} />
           </button>
-          {cwd.trim() ? (
-            <span
-              className="composer-permission"
-              data-disabled={disabled}
-              title={disabled ? "The Codex service is unavailable" : "Codex can work in the selected directory"}
-            >
-              <ShieldCheck size={14} />
-              {disabled ? "Service unavailable" : "Workspace access"}
-            </span>
-          ) : (
-            <span className="composer-permission composer-permission--muted">
-              <FolderOpen size={14} />
-              Choose a workspace
-            </span>
-          )}
+          <ComposerControls
+            disabled={disabled}
+            effort={effort}
+            efforts={efforts}
+            onSettingsChange={onSettingsChange}
+            pending={pending}
+            permissionProfile={permissionProfile}
+            permissionProfiles={permissionProfiles}
+            running={running}
+          />
           <span className="composer-toolbar-spacer" />
           {showModel ? <label className="composer-control">
             <span className="sr-only">Model</span>
