@@ -20,4 +20,4 @@ Move the reasoning-effort and permission-profile controls out of the task header
 
 ## Scope
 
-Client-only. `TaskSettings` shrinks to the model select and the review button (the model-change effort fallback moved into `App`). `Composer` replaces its native model select with the model chip and drops the static `Workspace access` chip; chips shrink with ellipsized labels on narrow viewports so the toolbar never covers the send button. Protocol, adapter validation, persistence, and thread settings APIs are unchanged.
+Client-only. `TaskSettings` shrinks to the review button alone; the loaded task's model stays visible in the header context line and new tasks pick a model from the composer chip. `Composer` replaces its native model select with the model chip and drops the static `Workspace access` chip; chips shrink with ellipsized labels on narrow viewports so the toolbar never covers the send button. Protocol, adapter validation, persistence, and thread settings APIs are unchanged.

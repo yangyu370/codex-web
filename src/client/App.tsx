@@ -484,22 +484,10 @@ export function App({
           threadTitle={thread?.title}
           controls={<TaskSettings
             disabled={visibleSnapshot.service.status !== "ready" || historyOnly}
-            model={effectiveModel}
-            models={visibleSnapshot.models}
-            onModelChange={(nextModel) => {
-              setModel(nextModel);
-              const entry = visibleSnapshot.models.find((candidate) => candidate.id === nextModel);
-              const supported = entry?.supportedReasoningEfforts ?? [];
-              const nextEffort = supported.some((candidate) => candidate.id === effectiveEffort)
-                ? effectiveEffort
-                : entry?.defaultReasoningEffort ?? supported[0]?.id;
-              if (nextEffort) setEffort(nextEffort);
-            }}
             onReview={() => void startReview()}
             reviewDisabledReason={reviewDisabledReason}
             reviewEnabled={reviewEnabled}
             reviewRunning={reviewRunning}
-            showModel={Boolean(visibleSnapshot.loadedThreadId)}
           />}
         />
         {visibleSnapshot.service.error || actionError ? (
