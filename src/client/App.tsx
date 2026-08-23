@@ -17,6 +17,7 @@ import {
   type UploadHandle,
 } from "./attachments";
 import "./styles.css";
+import "./client-theme.css";
 
 const defaultAttachmentClient = new AttachmentClient();
 

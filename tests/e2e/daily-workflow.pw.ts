@@ -10,6 +10,40 @@ test("keeps the composer in the initial viewport with a long task history", asyn
   await expect(page.getByRole("textbox", { name: "Message Codex" })).toBeInViewport();
 });
 
+test("keeps the full shell visible at an intermediate desktop width", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Intermediate desktop regression");
+  await page.setViewportSize({ width: 950, height: 720 });
+  await page.goto("/");
+
+  await expect(page.getByRole("navigation", { name: "Workspace sections" })).toBeVisible();
+  const tabs = await page.getByRole("navigation", { name: "Workspace sections" }).boundingBox();
+  const sidebar = await page.getByRole("navigation", { name: "Tasks" }).boundingBox();
+  expect(tabs).not.toBeNull();
+  expect(sidebar).not.toBeNull();
+  expect(tabs?.x).toBe(sidebar?.width);
+  const viewport = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth);
+});
+
+test("uses the full compact width for task context and navigation", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Compact-width regression");
+  await page.setViewportSize({ width: 768, height: 820 });
+  await page.goto("/");
+
+  const tabs = await page.getByRole("navigation", { name: "Workspace sections" }).boundingBox();
+  const context = await page.getByRole("group", { name: "Task context" }).boundingBox();
+  const cwd = await page.getByRole("combobox", { name: "Working directory" }).boundingBox();
+  expect(tabs).not.toBeNull();
+  expect(tabs?.x).toBe(0);
+  expect((tabs?.x ?? 0) + (tabs?.width ?? 0)).toBeLessThanOrEqual(768);
+  expect(context).not.toBeNull();
+  expect(cwd).not.toBeNull();
+  expect(cwd?.width ?? 0).toBeGreaterThan((context?.width ?? 0) * 0.6);
+});
+
 test("selects a working directory from the Codex host", async ({ page }) => {
   await page.goto("/");
 

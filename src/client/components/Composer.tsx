@@ -1,4 +1,13 @@
-import { ArrowUp, FolderGit2, FolderOpen, Paperclip, Square } from "lucide-react";
+import {
+  ArrowUp,
+  ChevronDown,
+  FolderGit2,
+  FolderOpen,
+  Laptop,
+  Paperclip,
+  ShieldCheck,
+  Square,
+} from "lucide-react";
 import { useRef } from "react";
 
 import type { ModelSummary } from "../../shared/protocol";
@@ -53,6 +62,37 @@ export function Composer({
     (value.trim().length > 0 || hasReadyAttachment) && cwd.trim().length > 0 && Boolean(model);
   return (
     <div className="composer-wrap">
+      <div className="composer-context" aria-label="Task context" role="group">
+        <div className="composer-control composer-control--cwd">
+          <FolderGit2 size={14} />
+          <input
+            aria-label="Working directory"
+            list="recent-directories"
+            onChange={(event) => onCwdChange(event.target.value)}
+            placeholder="Choose a working directory"
+            value={cwd}
+          />
+          <datalist id="recent-directories">
+            {recentDirectories.map((directory) => (
+              <option key={directory} value={directory} />
+            ))}
+          </datalist>
+          <button
+            aria-label="Browse server directories"
+            className="composer-control__browse"
+            disabled={disabled || !onBrowseDirectory}
+            onClick={onBrowseDirectory}
+            title="Choose a folder on the Codex host"
+            type="button"
+          >
+            <FolderOpen size={14} />
+          </button>
+        </div>
+        <span className="composer-context__meta">
+          <Laptop size={13} />
+          Host
+        </span>
+      </div>
       <div className="composer">
         <AttachmentList
           attachments={attachments}
@@ -96,31 +136,22 @@ export function Composer({
           >
             <Paperclip size={15} />
           </button>
-          <div className="composer-control composer-control--cwd">
-            <FolderGit2 size={14} />
-            <input
-              aria-label="Working directory"
-              list="recent-directories"
-              onChange={(event) => onCwdChange(event.target.value)}
-              placeholder="Working directory"
-              value={cwd}
-            />
-            <datalist id="recent-directories">
-              {recentDirectories.map((directory) => (
-                <option key={directory} value={directory} />
-              ))}
-            </datalist>
-            <button
-              aria-label="Browse server directories"
-              className="composer-control__browse"
-              disabled={disabled || !onBrowseDirectory}
-              onClick={onBrowseDirectory}
-              title="Choose a folder on the Codex host"
-              type="button"
+          {cwd.trim() ? (
+            <span
+              className="composer-permission"
+              data-disabled={disabled}
+              title={disabled ? "The Codex service is unavailable" : "Codex can work in the selected directory"}
             >
+              <ShieldCheck size={14} />
+              {disabled ? "Service unavailable" : "Workspace access"}
+            </span>
+          ) : (
+            <span className="composer-permission composer-permission--muted">
               <FolderOpen size={14} />
-            </button>
-          </div>
+              Choose a workspace
+            </span>
+          )}
+          <span className="composer-toolbar-spacer" />
           {showModel ? <label className="composer-control">
             <span className="sr-only">Model</span>
             <select
@@ -134,6 +165,7 @@ export function Composer({
                 </option>
               ))}
             </select>
+            <ChevronDown aria-hidden="true" size={13} />
           </label> : null}
           {running ? (
             <button aria-label="Stop" className="send-button send-button--stop" onClick={onInterrupt} type="button">
