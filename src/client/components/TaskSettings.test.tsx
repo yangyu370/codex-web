@@ -33,6 +33,43 @@ const profiles = [
 ];
 
 describe("TaskSettings", () => {
+  test("gives each permissions menu unique relationships and focuses its selected option when opened", async () => {
+    render(
+      <>
+        <TaskSettings
+          model="gpt-5.6"
+          models={models}
+          onReview={() => undefined}
+          onSettingsChange={() => undefined}
+          permissionProfile=":workspace"
+          permissionProfiles={profiles}
+        />
+        <TaskSettings
+          model="gpt-5.6"
+          models={models}
+          onReview={() => undefined}
+          onSettingsChange={() => undefined}
+          permissionProfile=":workspace"
+          permissionProfiles={profiles}
+        />
+      </>,
+    );
+    const user = userEvent.setup();
+    const triggers = screen.getAllByRole("button", { name: "Permissions" });
+    const firstTrigger = triggers[0]!;
+    const secondTrigger = triggers[1]!;
+
+    await user.click(firstTrigger);
+
+    expect({
+      menuIdsAreUnique: firstTrigger.getAttribute("aria-controls") !== secondTrigger.getAttribute("aria-controls"),
+      focusedOptionName: (document.activeElement as HTMLElement | null)?.getAttribute("aria-label"),
+    }).toEqual({
+      menuIdsAreUnique: true,
+      focusedOptionName: "Approve when needed",
+    });
+  });
+
   test("opens the permissions menu with friendly names and sends the native full-access profile id", async () => {
     const changes: unknown[] = [];
     render(

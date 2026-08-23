@@ -1,5 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { BrainCircuit, ScanSearch, ShieldCheck } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import {
+  BrainCircuit,
+  Check,
+  CircleQuestionMark,
+  Eye,
+  FolderCog,
+  ScanSearch,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 
 import type {
   ModelSummary,
@@ -55,6 +64,18 @@ function permissionPresentation(profile: PermissionProfileSummary): PermissionPr
   };
 }
 
+function PermissionProfileIcon({ profileId }: { profileId: string }) {
+  const Icon = profileId === ":read-only"
+    ? Eye
+    : profileId === ":workspace"
+      ? FolderCog
+      : profileId === ":danger-full-access"
+        ? ShieldAlert
+        : CircleQuestionMark;
+
+  return <Icon aria-hidden="true" size={17} strokeWidth={1.7} />;
+}
+
 export function TaskSettings({
   models,
   permissionProfiles,
@@ -76,6 +97,9 @@ export function TaskSettings({
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const permissionTriggerRef = useRef<HTMLButtonElement>(null);
   const permissionDialogRef = useRef<HTMLDivElement>(null);
+  const permissionOptionRefs = useRef(new Map<string, HTMLButtonElement>());
+  const permissionMenuId = useId();
+  const permissionHeadingId = useId();
   const selectedModel = models.find((entry) => entry.id === model) ?? models[0];
   const catalogEfforts = selectedModel?.supportedReasoningEfforts ?? [];
   const efforts = effort && !catalogEfforts.some((entry) => entry.id === effort)
@@ -98,6 +122,11 @@ export function TaskSettings({
 
   useEffect(() => {
     if (!permissionMenuOpen) return;
+
+    const initialProfile = permissionProfiles.find((profile) => (
+      profile.id === permissionProfile && profile.allowed
+    )) ?? permissionProfiles.find((profile) => profile.allowed);
+    permissionOptionRefs.current.get(initialProfile?.id ?? "")?.focus();
 
     const dismissOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -169,7 +198,7 @@ export function TaskSettings({
         <div className="task-setting" data-pending={pending === "permissionProfile" || undefined}>
           <span><ShieldCheck size={13} /> Permissions {running ? <em>Next turn</em> : null}</span>
           <button
-            aria-controls="permission-profile-menu"
+            aria-controls={permissionMenuId}
             aria-expanded={permissionMenuOpen}
             aria-haspopup="dialog"
             aria-label="Permissions"
@@ -180,37 +209,57 @@ export function TaskSettings({
             title={selectedPermissionPresentation?.label ?? "Select a permission profile"}
             type="button"
           >
-            <span>{selectedPermissionPresentation?.label ?? "Select profile"}</span>
+            <span className="permission-profile-trigger__content">
+              {selectedPermissionPresentation?.label ?? "Select profile"}
+            </span>
           </button>
           {permissionMenuOpen ? (
             <div
-              aria-labelledby="permission-profile-menu-title"
+              aria-labelledby={permissionHeadingId}
               className="permission-profile-menu"
-              id="permission-profile-menu"
+              id={permissionMenuId}
               ref={permissionDialogRef}
               role="dialog"
             >
-              <h2 id="permission-profile-menu-title">How should Codex run?</h2>
+              <h2 className="permission-profile-menu__heading" id={permissionHeadingId}>How should Codex run?</h2>
               <div className="permission-profile-options">
                 {permissionProfiles.map((profile, index) => {
                   const presentation = permissionPresentation(profile);
-                  const descriptionId = `permission-profile-description-${index}`;
+                  const descriptionId = `${permissionMenuId}-description-${index}`;
+                  const selected = profile.id === permissionProfile;
                   return (
                     <button
                       aria-describedby={presentation.description ? descriptionId : undefined}
                       aria-label={presentation.label}
-                      aria-pressed={profile.id === permissionProfile}
+                      aria-pressed={selected}
                       className="permission-profile-option"
                       data-profile-id={profile.id}
                       disabled={!profile.allowed}
                       key={profile.id}
                       onClick={() => selectPermission(profile)}
+                      ref={(element) => {
+                        if (element) permissionOptionRefs.current.set(profile.id, element);
+                        else permissionOptionRefs.current.delete(profile.id);
+                      }}
                       title={profile.description}
                       type="button"
                     >
-                      <span>{presentation.label}</span>
-                      {presentation.description ? <span id={descriptionId}>{presentation.description}</span> : null}
-                      {profile.id === permissionProfile ? <span aria-hidden="true">✓</span> : null}
+                      <span className="permission-profile-option__icon">
+                        <PermissionProfileIcon profileId={profile.id} />
+                      </span>
+                      <span className="permission-profile-option__copy">
+                        <span className="permission-profile-option__title">{presentation.label}</span>
+                        {presentation.description ? (
+                          <span className="permission-profile-option__description" id={descriptionId}>
+                            {presentation.description}
+                          </span>
+                        ) : null}
+                      </span>
+                      {selected ? (
+                        <span aria-hidden="true" className="permission-profile-option__selected-marker">
+                          <Check size={16} strokeWidth={2.2} />
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
