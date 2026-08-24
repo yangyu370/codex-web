@@ -86,7 +86,7 @@ export interface SharedAppServerBackend {
 
 - [x] **Step 5: Run the focused tests and `bun run typecheck`; expect PASS.**
 
-- [ ] **Step 6: Commit with `git commit -m "refactor: abstract shared app server backend"`.**
+- [x] **Step 6: Commit with `git commit -m "refactor: abstract shared app server backend"`.**
 
 ### Task 2: TCP WebSocket Transport and Endpoint Validation
 
@@ -98,7 +98,7 @@ export interface SharedAppServerBackend {
 - Produces: `parseManagedLoopbackEndpoint(source): URL`.
 - Produces: `connectTcpWebSocket(endpoint, options?): Promise<JsonRpcTransport>`.
 
-- [ ] **Step 1: Write failing table tests** for `127.0.0.1`, `[::1]`, invalid schemes, credentials, hostname aliases, paths, queries, fragments, missing/invalid ports, binary frames, oversized frames, timeout, clean close, and backpressure.
+- [x] **Step 1: Write failing table tests** for `127.0.0.1`, `[::1]`, invalid schemes, credentials, hostname aliases, paths, queries, fragments, missing/invalid ports, binary frames, oversized frames, timeout, clean close, and backpressure.
 
 ```ts
 expect(parseManagedLoopbackEndpoint("ws://127.0.0.1:4500").href)
@@ -107,11 +107,11 @@ expect(() => parseManagedLoopbackEndpoint("ws://localhost:4500"))
   .toThrow("literal loopback");
 ```
 
-- [ ] **Step 2: Run `bun test src/server/app-server/tcp-websocket-transport.test.ts`; expect missing-module failure.**
+- [x] **Step 2: Run `bun test src/server/app-server/tcp-websocket-transport.test.ts`; expect missing-module failure.**
 
-- [ ] **Step 3: Implement transport with `ws`, `handshakeTimeout: 5000`, `maxPayload: 8_388_608`, text-only messages, a 1 MiB send-buffer ceiling, callback-backed send promises, and one terminal close notification.**
+- [x] **Step 3: Implement transport with `ws`, `handshakeTimeout: 5000`, `maxPayload: 8_388_608`, text-only messages, a 1 MiB send-buffer ceiling, callback-backed send promises, and one terminal close notification.**
 
-- [ ] **Step 4: Run the focused transport tests and Unix transport tests; expect PASS.**
+- [x] **Step 4: Run the focused transport tests and Unix transport tests; expect PASS.**
 
 - [ ] **Step 5: Commit with `git commit -m "feat: add loopback tcp websocket transport"`.**
 
