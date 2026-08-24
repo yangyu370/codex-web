@@ -14,7 +14,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-describe("connectUnixWebSocket", () => {
+describe.skipIf(process.platform !== "darwin")("connectUnixWebSocket", () => {
   test("upgrades over a Unix socket and exchanges text messages", async () => {
     const harness = await unixWebSocketServer();
     const transportPromise = connectUnixWebSocket(harness.socketPath);
