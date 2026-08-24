@@ -51,6 +51,24 @@ export function parseLifecycleArguments(args: string[]): LifecycleArguments {
   };
 }
 
+export function validateRemoteCliArguments(args: string[]): void {
+  for (const argument of args) {
+    if (
+      argument === "--remote" || argument.startsWith("--remote=") ||
+      argument === "--remote-auth-token-env" ||
+      argument.startsWith("--remote-auth-token-env=")
+    ) {
+      throw new Error("CLI arguments must not replace the managed remote endpoint");
+    }
+  }
+}
+
+export function buildRemoteCliArguments(endpoint: string, args: string[]): string[] {
+  parseManagedLoopbackEndpoint(endpoint);
+  validateRemoteCliArguments(args);
+  return ["--remote", endpoint, ...args];
+}
+
 if (import.meta.main) {
   try {
     const args = parseLifecycleArguments(process.argv.slice(2));

@@ -8,6 +8,7 @@
     "dev:server": "bun scripts/dev-server.ts",
     "build": "vite build",
     "start": "bun src/server/index.ts",
+    "app-server:lifecycle": "bun scripts/app-server-lifecycle.ts",
     "test:e2e": "playwright test",
     "test:smoke": "bun tests/smoke/shared-daemon.ts",
     "test:smoke:daemon": "bun tests/smoke/shared-daemon.ts",

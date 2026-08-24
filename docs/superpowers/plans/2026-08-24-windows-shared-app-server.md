@@ -177,7 +177,7 @@ expect(fakeHost.terminated).toEqual([]);
 
 - [x] **Step 5: Run focused tests, protocol tests, and typecheck; expect PASS.**
 
-- [ ] **Step 6: Commit with `git commit -m "feat: select shared backend by platform"`.**
+- [x] **Step 6: Commit with `git commit -m "feat: select shared backend by platform"`.**
 
 ### Task 5: Windows PowerShell Management and CLI Wrappers
 
@@ -193,15 +193,15 @@ expect(fakeHost.terminated).toEqual([]);
 - Produces: management commands `start`, `status`, `stop`, `restart`.
 - Produces: `codex-web-cli.ps1 [codex arguments...]` forwarding to `codex --remote <verified endpoint>`.
 
-- [ ] **Step 1: Write failing launcher tests** that parse both scripts, verify lifecycle command construction, reject `--remote` and `--remote-auth-token-env` in both split and `=` forms, preserve `--`, Unicode, quotes and spaces, and return the native exit code.
+- [x] **Step 1: Write failing launcher tests** that parse both scripts, verify lifecycle command construction, reject `--remote` and `--remote-auth-token-env` in both split and `=` forms, preserve `--`, Unicode, quotes and spaces, and return the native exit code.
 
-- [ ] **Step 2: Run `bun test scripts/windows-launchers.test.ts`; expect missing-script failures.**
+- [x] **Step 2: Run `bun test scripts/windows-launchers.test.ts`; expect missing-script failures.**
 
-- [ ] **Step 3: Implement thin scripts that resolve Bun/repo paths, invoke `scripts/app-server-lifecycle.ts`, parse its bounded JSON endpoint, and use PowerShell's call operator with an argument array.**
+- [x] **Step 3: Implement thin scripts that resolve Bun/repo paths, invoke `scripts/app-server-lifecycle.ts`, parse its bounded JSON endpoint, and use PowerShell's call operator with an argument array.**
 
-- [ ] **Step 4: Add `CODEX_WEB_WINDOWS_SHARED` validation to `start-windows.ps1` without changing global configuration.**
+- [x] **Step 4: Add `CODEX_WEB_WINDOWS_SHARED` validation to `start-windows.ps1` without changing global configuration.**
 
-- [ ] **Step 5: Add CI PowerShell parser checks and run tests/typecheck; if `pwsh` is unavailable locally, assert the Bun structural tests and leave the native parser to Windows CI.**
+- [x] **Step 5: Add CI PowerShell parser checks and run tests/typecheck; if `pwsh` is unavailable locally, assert the Bun structural tests and leave the native parser to Windows CI.**
 
 - [ ] **Step 6: Commit with `git commit -m "feat: add windows shared cli launchers"`.**
 
