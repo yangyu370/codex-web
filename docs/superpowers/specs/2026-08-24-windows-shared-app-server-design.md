@@ -74,6 +74,37 @@ Polling `thread/read` solves monitoring for ordinary CLI threads but cannot prov
 
 ## Architecture
 
+### Shared backend boundary
+
+Codex Web keeps one platform-neutral shared-connection policy while using a
+platform-specific lifecycle backend:
+
+```text
+SharedAppServerBackend
+  ensure(): Promise<SharedServerInfo>
+  connect(info): Promise<JsonRpcTransport>
+
+MacNativeDaemonBackend
+  -> codex app-server daemon start
+  -> validated Unix-socket WebSocket
+
+WindowsManagedTcpBackend
+  -> WindowsSharedAppServerCoordinator
+  -> validated loopback TCP WebSocket
+```
+
+The process manager owns shared-first selection, native initialization,
+reconnection, embedded fallback, and shutdown policy. It does not own daemon
+or Windows process mechanics. Service state describes the connection as
+`mode: "shared" | "embedded"`; local diagnostics may additionally record
+`sharedBackend: "nativeDaemon" | "managedTcp"`. Windows managed TCP mode is
+not called a daemon merely because it survives an individual client.
+
+Thread-open policy, history-only monitoring, normalized access state, browser
+protocol, and UI projection are platform-neutral. macOS keeps its native
+daemon lifecycle and Unix-socket security boundary; Windows supplies the new
+managed TCP backend.
+
 ### Shared Windows mode
 
 The shared app-server command is:
@@ -88,13 +119,14 @@ Codex Web adds a TCP WebSocket implementation of the existing `JsonRpcTransport`
 
 The process manager attempts Windows shared mode before embedded mode. After connecting it performs the normal app-server `initialize` request and `initialized` notification. A successful handshake sets:
 
-- process mode to `daemon`
+- process mode to `shared`
+- shared backend to `managedTcp` in local diagnostics
 - `liveHandoff` to `available`
-- the native Codex version in the service snapshot
+- the resolved CLI version and actual running app-server version in the service snapshot
 
 If shared startup or connection fails, Codex Web records a bounded local diagnostic and launches the existing private stdio app-server. Embedded mode reports `liveHandoff: "unavailable"` but preserves history, new tasks, attachments, approvals, and reviews.
 
-macOS continues using its managed daemon and Unix-socket WebSocket transport. The new TCP transport does not replace or weaken Unix socket validation.
+macOS continues using its managed daemon and Unix-socket WebSocket transport through `MacNativeDaemonBackend`. The new TCP transport does not replace or weaken Unix socket validation. macOS reports `mode: "shared"` with local backend `nativeDaemon`.
 
 ### Components
 
@@ -115,10 +147,11 @@ The implementation stores non-secret lifecycle metadata beneath `%LOCALAPPDATA%\
 - endpoint
 - process ID when Codex Web started the process
 - resolved Codex executable path
+- canonical active `CODEX_HOME`
 - observed Codex version
 - lifecycle generation and start timestamp
 
-Metadata is advisory. A PID file or open TCP port alone never proves readiness. Every caller verifies the endpoint by completing a WebSocket connection and native initialization handshake.
+Metadata is advisory. A PID file or open TCP port alone never proves readiness. Every caller verifies the endpoint by completing a WebSocket connection and native initialization handshake. Reuse additionally requires the stored process identity, canonical `CODEX_HOME`, executable, endpoint, and lifecycle generation to match. An unknown process is not reused merely because it answers like a Codex app-server.
 
 #### TCP WebSocket transport
 
@@ -184,7 +217,7 @@ The first release does not continuously supervise a shared process when no clien
 
 ### Version changes
 
-If the resolved `codex.exe` version differs from a running verified shared process, clients may continue using the running version. Codex Web shows a bounded restart-required diagnostic and does not automatically terminate the process because doing so could interrupt active work. The explicit `restart` command applies the new version.
+Service state tracks the resolved CLI version and the actual running app-server version separately. If the resolved `codex.exe` version differs from a running verified shared process, clients may continue using the running version. Codex Web shows a bounded restart-required diagnostic and does not automatically terminate the process because doing so could interrupt active work. The explicit `restart` command applies the new version. Compatibility checks use the running app-server version rather than assuming it matches the CLI executable.
 
 ## Data Flow
 
@@ -298,7 +331,8 @@ Shared `readWrite` threads never use this polling path because they receive nati
 | --- | --- | --- |
 | Codex executable missing or incompatible | Exit with actionable error | Fall back to embedded mode when possible |
 | Configured endpoint is not loopback | Reject configuration | Reject configuration; do not connect |
-| Port owned by another verified Codex app-server | Reuse it | Reuse it |
+| Port owned by the matching managed Codex app-server | Reuse it | Reuse it |
+| Port owned by another Codex app-server with unknown or mismatched identity | Exit without killing it | Fall back to embedded mode with diagnostic |
 | Port owned by an unknown process | Exit without killing it | Fall back to embedded mode with diagnostic |
 | Startup lock contention | Wait on readiness up to deadline | Wait on readiness up to deadline |
 | Shared handshake timeout | Exit with diagnostic ID | Fall back to embedded mode |
@@ -470,6 +504,8 @@ The remote browser continues using the configured Codex Web public URL. No Cloud
 
 The implementation should remain divided into independently testable units:
 
+- platform-neutral shared-backend contract and process-manager policy;
+- macOS native-daemon backend retaining the current lifecycle and Unix socket;
 - platform-neutral TCP WebSocket transport;
 - Windows-only lifecycle coordinator;
 - process-manager mode selection and fallback;
@@ -478,4 +514,4 @@ The implementation should remain divided into independently testable units:
 - normalized protocol and UI projection;
 - thin PowerShell entry points.
 
-No unrelated UI redesign, app-server protocol expansion, global configuration migration, or macOS daemon refactor is part of this work.
+No unrelated UI redesign, app-server protocol expansion, global configuration migration, or replacement of the macOS native daemon with the Windows managed TCP lifecycle is part of this work.

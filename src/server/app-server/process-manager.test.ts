@@ -103,7 +103,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 describe("AppServerProcessManager", () => {
   test("disconnects from shared daemon turns without interrupting them", () => {
-    expect(shouldInterruptOnWebShutdown({ status: "ready", mode: "daemon" })).toBe(false);
+    expect(shouldInterruptOnWebShutdown({ status: "ready", mode: "shared" })).toBe(false);
     expect(shouldInterruptOnWebShutdown({ status: "ready", mode: "embedded" })).toBe(true);
   });
 
@@ -123,7 +123,7 @@ describe("AppServerProcessManager", () => {
     });
   });
 
-  test("prefers the shared daemon on macOS and leaves it running on stop", async () => {
+  test("prefers the native shared backend on macOS and leaves it running on stop", async () => {
     const transport = new MemoryTransport();
     const terminated: number[] = [];
     const lifecycleCalls: string[] = [];
@@ -151,7 +151,10 @@ describe("AppServerProcessManager", () => {
     expect(lifecycleCalls).toEqual(["/custom/codex-home"]);
     expect(manager.snapshot()).toMatchObject({
       status: "ready",
-      mode: "daemon",
+      mode: "shared",
+      sharedBackend: "nativeDaemon",
+      cliVersion: "codex-cli 1.2.3",
+      appServerVersion: "1.2.3",
       liveHandoff: "available",
     });
 
@@ -248,7 +251,11 @@ describe("AppServerProcessManager", () => {
 
     expect(delays).toEqual([250]);
     expect(lifecycleStarts).toBe(2);
-    expect(manager.snapshot()).toMatchObject({ mode: "daemon", liveHandoff: "available" });
+    expect(manager.snapshot()).toMatchObject({
+      mode: "shared",
+      sharedBackend: "nativeDaemon",
+      liveHandoff: "available",
+    });
   });
 
   test("becomes ready only after initialize and initialized handshake", async () => {
