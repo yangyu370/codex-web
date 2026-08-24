@@ -158,6 +158,7 @@ export class CodexAdapter {
   async resumeThread(
     threadId: string,
     access: ThreadAccess = { threadId, mode: "readWrite" },
+    shouldProject: () => boolean = () => true,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
     const startedAt = Date.now();
     try {
@@ -194,23 +195,26 @@ export class CodexAdapter {
       this.#state.addDiagnostic(
         `resume ${threadId}: pages=${pages + 1} items=${items.length} totalMs=${Date.now() - startedAt}`,
       );
-      this.#state.upsertThread(decoded.thread);
-      this.#state.loadThread(decoded.thread.id, items, activeTurn, access);
       const runtime = decodeThreadEnvelope(response).settings;
-      if (runtime) this.#state.setThreadSettings(runtime);
+      if (shouldProject()) {
+        this.#state.upsertThread(decoded.thread);
+        this.#state.loadThread(decoded.thread.id, items, activeTurn, access);
+        if (runtime) this.#state.setThreadSettings(runtime);
+      }
       return decoded.thread;
     } catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith("compatibilityError:")) throw error;
-      return this.#loadThread("thread/resume", { threadId }, access);
+      return this.#loadThread("thread/resume", { threadId }, access, shouldProject);
     }
   }
 
   async readThread(
     threadId: string,
     access: ThreadAccess = { threadId, mode: "historyOnly", reason: "unsupportedSource" },
+    shouldProject: () => boolean = () => true,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
     const history = await this.readThreadHistory(threadId);
-    this.projectThreadHistory(history, access, true);
+    if (shouldProject()) this.projectThreadHistory(history, access, true);
     return history.thread;
   }
 
@@ -358,10 +362,11 @@ export class CodexAdapter {
     method: "thread/resume" | "thread/read",
     params: Record<string, unknown>,
     access: ThreadAccess,
+    shouldProject: () => boolean,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
     const response = await this.#request(method, params);
     const history = this.#decodeThreadHistory(method, response);
-    this.projectThreadHistory(history, access);
+    if (shouldProject()) this.projectThreadHistory(history, access);
     return history.thread;
   }
 

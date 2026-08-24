@@ -102,4 +102,26 @@ describe("ThreadAccessController", () => {
     release();
     expect(await first).toBe(await second);
   });
+
+  test("prevents an older selection from projecting after a newer task opens", async () => {
+    let releaseFirst!: () => void;
+    const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const projected: string[] = [];
+    const access = new ThreadAccessController({
+      resumeThread: async (threadId, _nextAccess, isCurrent) => {
+        if (threadId === "thread-a") await firstPending;
+        if (isCurrent()) projected.push(threadId);
+        return { ...thread, id: threadId };
+      },
+      readThread: async (threadId) => ({ ...thread, id: threadId }),
+    });
+
+    const first = access.open("thread-a");
+    await Bun.sleep(0);
+    await access.open("thread-b");
+    releaseFirst();
+    await first;
+
+    expect(projected).toEqual(["thread-b"]);
+  });
 });

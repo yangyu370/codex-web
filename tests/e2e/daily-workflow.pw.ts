@@ -147,6 +147,40 @@ test("daily Codex workflow", async ({ page }, testInfo) => {
   });
 });
 
+test("continues a CLI-first task from Web and can interrupt the turn", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Shared CLI handoff regression");
+  await page.goto("/");
+
+  await page.getByRole("button", { name: /Shared CLI task/ }).click();
+  await expect(page.getByText("CLI and Web are connected")).toBeVisible();
+  const message = page.getByRole("textbox", { name: "Message Codex" });
+  await expect(message).toBeEnabled();
+  await message.fill("Continue from Web");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("Approve file changes")).toBeVisible();
+
+  await page.getByRole("button", { name: "Stop" }).first().click();
+  await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0);
+});
+
+test("monitors an ordinary CLI task read-only and retries read-write after release", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Private writer monitoring regression");
+  await page.goto("/");
+  const task = page.getByRole("button", { name: /Private CLI task/ });
+
+  await task.click();
+  await expect(page.getByText("READ ONLY · LOCAL CLI")).toBeVisible();
+  await expect(page.getByRole("status")).toContainText(
+    "This CLI task was not started in shared mode",
+  );
+  await expect(page.getByRole("textbox", { name: "Message Codex" })).toBeDisabled();
+  await expect(page.getByRole("article").getByText("Private CLI update 2")).toBeVisible({ timeout: 5_000 });
+
+  await task.click();
+  await expect(page.getByRole("status")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Message Codex" })).toBeEnabled();
+});
+
 test("uploads server-side context and removes it after the turn", async ({ page }, testInfo) => {
   const project = await mkdtemp(join(tmpdir(), "codex-web-upload-e2e-"));
   try {

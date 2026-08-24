@@ -102,6 +102,22 @@ describe("HistoryThreadRefresher", () => {
     expect(clock.pending()).toEqual([3_000]);
   });
 
+  test("retries opening a history-only task when its catalog revision changes", async () => {
+    const clock = fakeClock();
+    const retries: string[] = [];
+    const refresher = createRefresher(clock, {
+      retryOpen: async (threadId) => { retries.push(threadId); },
+    });
+    refresher.select(historyOnly("thread-1"));
+    refresher.browserConnected();
+
+    refresher.catalogUpdated([thread("thread-1", 1)]);
+    refresher.catalogUpdated([thread("thread-1", 2)]);
+    await Bun.sleep(0);
+
+    expect(retries).toEqual(["thread-1"]);
+  });
+
   test("drops stale reads after selection changes and clears read-write polling", async () => {
     const clock = fakeClock();
     const projected: Array<[string, History]> = [];
@@ -169,6 +185,7 @@ function createRefresher(
     read?: (threadId: string) => Promise<History>;
     project?: (threadId: string, history: History) => void;
     onError?: (error: Error) => void;
+    retryOpen?: (threadId: string) => Promise<void>;
   } = {},
 ): HistoryThreadRefresher<History> {
   return new HistoryThreadRefresher<History>({
@@ -176,6 +193,7 @@ function createRefresher(
     project: overrides.project ?? (() => undefined),
     signature: (history) => `${history.revision}:${history.text}`,
     onError: overrides.onError,
+    retryOpen: overrides.retryOpen,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
   });

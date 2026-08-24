@@ -14,6 +14,7 @@ import {
   type WindowsSharedAppServerCoordinatorOptions,
   type WindowsSharedConnectionInfo,
 } from "./windows-shared-coordinator";
+import { codexVersionAtLeast, MINIMUM_WINDOWS_SHARED_VERSION } from "./windows-version";
 
 export interface WindowsManagedBackendOptions {
   env: Record<string, string>;
@@ -40,6 +41,11 @@ export class WindowsManagedBackend implements SharedAppServerBackend {
   }
 
   async ensureAndConnect(context: SharedBackendContext) {
+    if (!codexVersionAtLeast(context.cliVersion, MINIMUM_WINDOWS_SHARED_VERSION)) {
+      throw new Error(
+        `Windows shared app-server requires Codex ${MINIMUM_WINDOWS_SHARED_VERSION} or newer`,
+      );
+    }
     const env = { ...this.#options.env, ...context.env };
     const endpoint = normalizedEndpoint(
       env.CODEX_WEB_APP_SERVER_URL ?? "ws://127.0.0.1:4500",
@@ -64,6 +70,11 @@ export class WindowsManagedBackend implements SharedAppServerBackend {
     const coordinator = this.#options.coordinatorFactory?.(coordinatorOptions)
       ?? new WindowsSharedAppServerCoordinator(coordinatorOptions);
     const info: WindowsSharedConnectionInfo = await coordinator.ensure();
+    if (!codexVersionAtLeast(info.appServerVersion, MINIMUM_WINDOWS_SHARED_VERSION)) {
+      throw new Error(
+        `Windows shared app-server requires Codex ${MINIMUM_WINDOWS_SHARED_VERSION} or newer`,
+      );
+    }
     const transport = await (this.#options.connect ?? connectTcpWebSocket)(info.endpoint);
     return {
       info: {

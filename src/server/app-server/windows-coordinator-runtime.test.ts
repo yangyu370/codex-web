@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -35,16 +35,37 @@ describe("Windows coordinator file store", () => {
     const root = await mkdtemp(path.join(tmpdir(), "codex-web-lock-"));
     try {
       const store = createWindowsCoordinatorFileStore(root, "C:\\Users\\dev\\.codex");
-      const order: string[] = [];
+      const completed: string[] = [];
+      let active = 0;
+      let maximumActive = 0;
+      const operation = (name: string) => store.withStartupLock(async () => {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await Bun.sleep(10);
+        completed.push(name);
+        active -= 1;
+      });
       await Promise.all([
-        store.withStartupLock(async () => {
-          order.push("first-start");
-          await Bun.sleep(10);
-          order.push("first-end");
-        }),
-        store.withStartupLock(async () => { order.push("second"); }),
+        operation("first"),
+        operation("second"),
       ]);
-      expect(order).toEqual(["first-start", "first-end", "second"]);
+      expect(maximumActive).toBe(1);
+      expect([...completed].sort()).toEqual(["first", "second"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("recovers an old empty lock left between creation and identity write", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "codex-web-stale-lock-"));
+    try {
+      const store = createWindowsCoordinatorFileStore(root, "C:\\Users\\dev\\.codex");
+      await mkdir(store.paths.directory, { recursive: true });
+      await writeFile(store.paths.lock, "", "utf8");
+      const old = new Date(Date.now() - 20_000);
+      await utimes(store.paths.lock, old, old);
+
+      await expect(store.withStartupLock(async () => "recovered")).resolves.toBe("recovered");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -63,5 +84,17 @@ function metadata(): WindowsSharedMetadata {
     startedAt: 1_777_000_000_000,
     hostPid: 101,
     nativePid: 102,
+    hostIdentity: identity(101, 1, "C:\\Tools\\bun.exe"),
+    nativeIdentity: identity(102, 101, "C:\\Tools\\codex.exe"),
+  };
+}
+
+function identity(pid: number, parentPid: number, executablePath: string) {
+  return {
+    pid,
+    parentPid,
+    creationDate: `20260825-${pid}`,
+    executablePath,
+    commandLine: `${executablePath} process ${pid}`,
   };
 }

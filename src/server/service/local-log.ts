@@ -16,10 +16,7 @@ export class LocalEventLog {
 
   append(type: "diagnostic" | "approval", payload: unknown): void {
     const serialized = JSON.stringify({ timestamp: Date.now(), type, payload });
-    const redacted = this.#secrets.reduce(
-      (value, secret) => value.split(secret).join("[REDACTED]"),
-      serialized,
-    );
+    const redacted = redactSecrets(serialized, this.#secrets);
     const entry = boundedLine(redacted, MAX_ENTRY_BYTES);
     this.#pending = this.#pending.then(() => this.#write(`${entry}\n`)).catch(() => undefined);
   }
@@ -46,6 +43,12 @@ export function secretEnvironmentValues(env: Record<string, string | undefined>)
   return Object.entries(env)
     .filter(([key, value]) => value && /(token|secret|password|api.?key|assertion|jwt)/i.test(key))
     .map(([, value]) => value as string);
+}
+
+export function redactSecrets(source: string, secrets: string[]): string {
+  return secrets
+    .filter((value) => value.length >= 4)
+    .reduce((value, secret) => value.split(secret).join("[REDACTED]"), source);
 }
 
 function boundedLine(value: string, maxBytes: number): string {

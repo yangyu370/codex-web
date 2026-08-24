@@ -3,9 +3,13 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { LocalEventLog } from "./local-log";
+import { LocalEventLog, redactSecrets } from "./local-log";
 
 describe("LocalEventLog", () => {
+  test("redacts secrets before lifecycle diagnostics reach disk", () => {
+    expect(redactSecrets("token=secret-token", ["secret-token"]))
+      .toBe("token=[REDACTED]");
+  });
   test("persists bounded redacted diagnostics and approval audit entries", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "codex-web-log-"));
     try {

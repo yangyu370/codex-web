@@ -12,6 +12,7 @@
     "test:e2e": "playwright test",
     "test:smoke": "bun tests/smoke/shared-daemon.ts",
     "test:smoke:daemon": "bun tests/smoke/shared-daemon.ts",
+    "test:smoke:windows-shared": "bun tests/smoke/windows-shared-app-server.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

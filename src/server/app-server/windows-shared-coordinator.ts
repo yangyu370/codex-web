@@ -1,4 +1,10 @@
 import { parseManagedLoopbackEndpoint } from "./tcp-websocket-transport";
+import type { WindowsProcessIdentity } from "./windows-app-server-host";
+import {
+  codexVersionAtLeast,
+  MINIMUM_WINDOWS_SHARED_VERSION,
+  sameCodexVersion,
+} from "./windows-version";
 
 export type WindowsSharedStatus = "stopped" | "starting" | "ready" | "incompatible";
 
@@ -8,11 +14,13 @@ export interface WindowsSharedMetadata {
   codexHome: string;
   executable: string;
   cliVersion: string;
-  appServerVersion: string;
+  appServerVersion?: string;
   generation: string;
   startedAt: number;
   hostPid: number;
   nativePid: number;
+  hostIdentity: WindowsProcessIdentity;
+  nativeIdentity: WindowsProcessIdentity;
 }
 
 export interface WindowsHostStartRequest {
@@ -29,10 +37,13 @@ export interface WindowsCoordinatorRuntime {
   writeMetadata(metadata: WindowsSharedMetadata): Promise<void>;
   removeMetadata(): Promise<void>;
   processMatches(metadata: WindowsSharedMetadata): Promise<boolean>;
+  managedProcessesGone(metadata: WindowsSharedMetadata): Promise<boolean>;
   probe(endpoint: string): Promise<{ appServerVersion: string }>;
   startHost(request: WindowsHostStartRequest): Promise<{
     hostPid: number;
     nativePid: number;
+    hostIdentity: WindowsProcessIdentity;
+    nativeIdentity: WindowsProcessIdentity;
   }>;
   stopHost(metadata: WindowsSharedMetadata): Promise<void>;
   now(): number;
@@ -85,13 +96,17 @@ export class WindowsSharedAppServerCoordinator {
 
   async status(): Promise<WindowsSharedStatus> {
     if (this.#starting) return "starting";
-    const metadata = await this.#options.runtime.readMetadata();
-    if (!metadata) return "stopped";
-    this.#assertIdentity(metadata);
-    if (!await this.#options.runtime.processMatches(metadata)) return "stopped";
-    const probe = await this.#probeOrUndefined();
-    if (!probe) return "stopped";
-    return probe.appServerVersion === this.#options.cliVersion ? "ready" : "incompatible";
+    return this.#options.runtime.withStartupLock(async () => {
+      const metadata = await this.#options.runtime.readMetadata();
+      if (!metadata) return "stopped";
+      this.#assertIdentity(metadata);
+      if (!await this.#options.runtime.processMatches(metadata)) return "stopped";
+      const probe = await this.#probeOrUndefined();
+      if (!probe) return "stopped";
+      return sameCodexVersion(probe.appServerVersion, this.#options.cliVersion)
+        ? "ready"
+        : "incompatible";
+    });
   }
 
   async stop(): Promise<void> {
@@ -100,6 +115,12 @@ export class WindowsSharedAppServerCoordinator {
       if (!metadata) return;
       this.#assertIdentity(metadata);
       if (!await this.#options.runtime.processMatches(metadata)) {
+        if (await this.#probeOrUndefined()) {
+          throw new Error("managed process identity could not be verified; refusing to stop");
+        }
+        if (!await this.#options.runtime.managedProcessesGone(metadata)) {
+          throw new Error("managed process identity is unavailable; refusing to discard metadata");
+        }
         await this.#options.runtime.removeMetadata();
         return;
       }
@@ -120,7 +141,14 @@ export class WindowsSharedAppServerCoordinator {
       if (await this.#options.runtime.processMatches(existing)) {
         const probe = await this.#probeOrUndefined();
         if (!probe) throw new Error("managed app-server process is running but not ready");
+        this.#assertCompatibleVersion(probe.appServerVersion);
         return this.#connectionInfo(existing, probe.appServerVersion);
+      }
+      if (await this.#probeOrUndefined()) {
+        throw new Error("managed process identity could not be verified");
+      }
+      if (!await this.#options.runtime.managedProcessesGone(existing)) {
+        throw new Error("managed process identity is unavailable; preserving lifecycle metadata");
       }
       await this.#options.runtime.removeMetadata();
     }
@@ -143,20 +171,24 @@ export class WindowsSharedAppServerCoordinator {
       codexHome: this.#options.codexHome,
       executable: this.#options.executable,
       cliVersion: this.#options.cliVersion,
-      appServerVersion: this.#options.cliVersion,
       generation,
       startedAt: this.#options.runtime.now(),
       hostPid: process.hostPid,
       nativePid: process.nativePid,
+      hostIdentity: process.hostIdentity,
+      nativeIdentity: process.nativeIdentity,
     };
     await this.#options.runtime.writeMetadata(metadata);
     const probe = await this.#waitForProbe();
     if (!probe) {
-      if (await this.#options.runtime.processMatches(metadata)) {
-        await this.#options.runtime.stopHost(metadata).catch(() => undefined);
-      }
-      await this.#options.runtime.removeMetadata();
+      await this.#cleanupFailedStart(metadata);
       throw new Error("managed app-server failed readiness verification");
+    }
+    if (!codexVersionAtLeast(probe.appServerVersion, MINIMUM_WINDOWS_SHARED_VERSION)) {
+      await this.#cleanupFailedStart(metadata);
+      throw new Error(
+        `Windows shared app-server requires Codex ${MINIMUM_WINDOWS_SHARED_VERSION} or newer`,
+      );
     }
     metadata.appServerVersion = probe.appServerVersion;
     await this.#options.runtime.writeMetadata(metadata);
@@ -172,6 +204,31 @@ export class WindowsSharedAppServerCoordinator {
     ) {
       throw new Error("managed identity mismatch");
     }
+  }
+
+  #assertCompatibleVersion(version: string): void {
+    if (!codexVersionAtLeast(version, MINIMUM_WINDOWS_SHARED_VERSION)) {
+      throw new Error(
+        `Windows shared app-server requires Codex ${MINIMUM_WINDOWS_SHARED_VERSION} or newer`,
+      );
+    }
+  }
+
+  async #cleanupFailedStart(metadata: WindowsSharedMetadata): Promise<void> {
+    if (await this.#options.runtime.processMatches(metadata)) {
+      await this.#options.runtime.stopHost(metadata);
+    } else {
+      if (await this.#probeOrUndefined()) {
+        throw new Error("failed managed app-server remains reachable; preserving lifecycle metadata");
+      }
+      if (!await this.#options.runtime.managedProcessesGone(metadata)) {
+        throw new Error("failed managed process identity is unavailable; preserving lifecycle metadata");
+      }
+    }
+    if (!await this.#options.runtime.managedProcessesGone(metadata)) {
+      throw new Error("failed managed process tree still exists; preserving lifecycle metadata");
+    }
+    await this.#options.runtime.removeMetadata();
   }
 
   async #probeOrUndefined(): Promise<{ appServerVersion: string } | undefined> {
@@ -200,7 +257,7 @@ export class WindowsSharedAppServerCoordinator {
       endpoint: metadata.endpoint,
       cliVersion: this.#options.cliVersion,
       appServerVersion,
-      restartRequired: appServerVersion !== this.#options.cliVersion,
+      restartRequired: !sameCodexVersion(appServerVersion, this.#options.cliVersion),
       hostPid: metadata.hostPid,
       nativePid: metadata.nativePid,
     };

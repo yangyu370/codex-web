@@ -211,12 +211,23 @@ export class WebState {
     this.#emit("thread.access.updated", { threadAccess: access });
   }
 
+  clearThreadAccess(): void {
+    if (!this.#threadAccess) return;
+    this.#threadAccess = undefined;
+    if (!this.#loadedThreadId) return;
+    this.#emit("thread.loaded", {
+      threadId: this.#loadedThreadId,
+      items: this.#visibleItems,
+      ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
+    });
+  }
+
   applyNotification(notification: JsonRpcNotification): void {
     try {
       const params = record(notification.params, `${notification.method}.params`);
       if (isTaskScopedNotification(notification.method)) {
         const threadId = optionalString(params.threadId);
-        if (!threadId || (this.#loadedThreadId && threadId !== this.#loadedThreadId)) return;
+        if (!threadId || threadId !== this.#loadedThreadId) return;
       }
       let changedThread: ThreadSummary | undefined;
       switch (notification.method) {
@@ -432,8 +443,13 @@ export class WebState {
   }
 
   #upsertThread(thread: ThreadSummary): void {
-    const bounded = boundThread(thread)[0];
-    if (!bounded) return;
+    const candidate = boundThread(thread)[0];
+    if (!candidate) return;
+    let bounded: ThreadSummary = candidate;
+    const loaded = this.#loadedThreadId === bounded.id
+      ? this.#threads.find((entry) => entry.id === bounded.id)
+      : undefined;
+    if (loaded?.cwd) bounded = { ...bounded, cwd: loaded.cwd };
     this.#threads = [bounded, ...this.#threads.filter((entry) => entry.id !== bounded.id)].slice(0, MAX_CATALOG_ENTRIES);
   }
 

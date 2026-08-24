@@ -62,12 +62,16 @@ describe("WindowsSharedAppServerCoordinator", () => {
 
   test("keeps a running older app-server and reports restart required", async () => {
     const runtime = memoryRuntime();
-    runtime.metadata = metadata({ appServerVersion: "0.148.0", cliVersion: "0.148.0" });
-    runtime.portOwner = { appServerVersion: "0.148.0" };
-    const coordinator = new WindowsSharedAppServerCoordinator({ ...base, runtime });
+    runtime.metadata = metadata({ appServerVersion: "0.149.1", cliVersion: "0.149.1" });
+    runtime.portOwner = { appServerVersion: "0.149.1" };
+    const coordinator = new WindowsSharedAppServerCoordinator({
+      ...base,
+      cliVersion: "0.150.0",
+      runtime,
+    });
 
     await expect(coordinator.ensure()).resolves.toMatchObject({
-      appServerVersion: "0.148.0",
+      appServerVersion: "0.149.1",
       restartRequired: true,
     });
     expect(runtime.starts).toBe(0);
@@ -83,6 +87,62 @@ describe("WindowsSharedAppServerCoordinator", () => {
 
     expect(runtime.stops).toBe(1);
     expect(runtime.metadata).toBeUndefined();
+  });
+
+  test("preserves metadata and refuses stop when the endpoint lives under changed identity", async () => {
+    const runtime = memoryRuntime();
+    runtime.metadata = metadata();
+    runtime.portOwner = { appServerVersion: "0.149.1" };
+    runtime.processMatches = async () => false;
+    const coordinator = new WindowsSharedAppServerCoordinator({ ...base, runtime });
+
+    await expect(coordinator.stop()).rejects.toThrow("refusing to stop");
+    expect(runtime.stops).toBe(0);
+    expect(runtime.metadata).toBeDefined();
+  });
+
+  test("preserves metadata when reuse identity verification fails transiently", async () => {
+    const runtime = memoryRuntime();
+    runtime.metadata = metadata();
+    runtime.portOwner = { appServerVersion: "0.149.1" };
+    runtime.processMatches = async () => false;
+    const coordinator = new WindowsSharedAppServerCoordinator({ ...base, runtime });
+
+    await expect(coordinator.ensure()).rejects.toThrow("identity could not be verified");
+    expect(runtime.metadata).toBeDefined();
+    expect(runtime.starts).toBe(0);
+  });
+
+  test("rejects and cleans up a newly started app-server below the compatibility floor", async () => {
+    const runtime = memoryRuntime();
+    runtime.portOwner = undefined;
+    const originalStart = runtime.startHost;
+    runtime.startHost = async (request) => {
+      const started = await originalStart(request);
+      runtime.portOwner = { appServerVersion: "0.149.0" };
+      return started;
+    };
+    const coordinator = new WindowsSharedAppServerCoordinator({ ...base, runtime });
+
+    await expect(coordinator.ensure()).rejects.toThrow("0.149.1 or newer");
+    expect(runtime.stops).toBe(1);
+    expect(runtime.metadata).toBeUndefined();
+  });
+
+  test("preserves startup metadata when verified cleanup fails", async () => {
+    const runtime = memoryRuntime();
+    const originalStart = runtime.startHost;
+    runtime.startHost = async (request) => {
+      const started = await originalStart(request);
+      runtime.portOwner = { appServerVersion: "0.149.0" };
+      return started;
+    };
+    runtime.stopHost = async () => { throw new Error("tree stop failed"); };
+    const coordinator = new WindowsSharedAppServerCoordinator({ ...base, runtime });
+
+    await expect(coordinator.ensure()).rejects.toThrow("tree stop failed");
+    expect(runtime.metadata).toBeDefined();
+    expect(runtime.portOwner).toBeDefined();
   });
 });
 
@@ -106,6 +166,7 @@ function memoryRuntime(): MemoryRuntime {
     async writeMetadata(value) { runtime.metadata = value; },
     async removeMetadata() { runtime.metadata = undefined; },
     async processMatches() { return runtime.metadata !== undefined; },
+    async managedProcessesGone() { return runtime.portOwner === undefined; },
     async probe() {
       if (!runtime.portOwner) throw new Error("ECONNREFUSED");
       if (runtime.readinessFailures > 0) {
@@ -117,7 +178,12 @@ function memoryRuntime(): MemoryRuntime {
     async startHost(request) {
       runtime.starts += 1;
       runtime.portOwner = { appServerVersion: request.cliVersion };
-      return { hostPid: 101, nativePid: 102 };
+      return {
+        hostPid: 101,
+        nativePid: 102,
+        hostIdentity: identity(101, 1, "C:\\Tools\\bun.exe"),
+        nativeIdentity: identity(102, 101, base.executable),
+      };
     },
     async stopHost() {
       runtime.stops += 1;
@@ -142,6 +208,18 @@ function metadata(overrides: Partial<WindowsSharedMetadata> = {}): WindowsShared
     startedAt: 1_777_000_000_000,
     hostPid: 101,
     nativePid: 102,
+    hostIdentity: identity(101, 1, "C:\\Tools\\bun.exe"),
+    nativeIdentity: identity(102, 101, base.executable),
     ...overrides,
+  };
+}
+
+function identity(pid: number, parentPid: number, executablePath: string) {
+  return {
+    pid,
+    parentPid,
+    creationDate: `20260825-${pid}`,
+    executablePath,
+    commandLine: `${executablePath} process ${pid}`,
   };
 }

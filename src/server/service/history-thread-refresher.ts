@@ -4,6 +4,7 @@ export interface HistoryThreadRefresherOptions<T> {
   read(threadId: string): Promise<T>;
   project(threadId: string, value: T): void;
   signature(value: T): string;
+  retryOpen?: (threadId: string) => Promise<void>;
   intervalMs?: number;
   maxBackoffMs?: number;
   setTimeout?: (callback: () => void | Promise<void>, milliseconds: number) => unknown;
@@ -12,8 +13,8 @@ export interface HistoryThreadRefresherOptions<T> {
 }
 
 export class HistoryThreadRefresher<T> {
-  readonly #options: Required<Omit<HistoryThreadRefresherOptions<T>, "onError">>
-    & Pick<HistoryThreadRefresherOptions<T>, "onError">;
+  readonly #options: Required<Omit<HistoryThreadRefresherOptions<T>, "onError" | "retryOpen">>
+    & Pick<HistoryThreadRefresherOptions<T>, "onError" | "retryOpen">;
   #selected?: ThreadAccess;
   #browserCount = 0;
   #timer?: unknown;
@@ -71,7 +72,15 @@ export class HistoryThreadRefresher<T> {
     if (updatedAt === undefined) return;
     const previous = this.#catalogUpdatedAt;
     this.#catalogUpdatedAt = updatedAt;
-    if (previous !== undefined && previous !== updatedAt) this.#refreshNow();
+    if (previous !== undefined && previous !== updatedAt) {
+      if (this.#options.retryOpen && this.#eligible()) {
+        void this.#options.retryOpen(threadId).catch((error: unknown) => {
+          this.#options.onError?.(error instanceof Error ? error : new Error(String(error)));
+        });
+      } else {
+        this.#refreshNow();
+      }
+    }
   }
 
   close(): void {

@@ -247,8 +247,29 @@ describe("tolerant decoders", () => {
 });
 
 describe("WebState", () => {
+  test("ignores task-scoped shared notifications until that task is selected", () => {
+    const state = new WebState("windows");
+
+    state.applyNotification({
+      method: "turn/started",
+      params: { threadId: "external-cli", turn: { id: "turn-external" } },
+    });
+    state.applyNotification({
+      method: "item/completed",
+      params: {
+        threadId: "external-cli",
+        turnId: "turn-external",
+        item: { id: "message-external", type: "agentMessage", text: "not selected" },
+      },
+    });
+
+    expect(state.snapshot().activeTurn).toBeUndefined();
+    expect(state.snapshot().visibleItems).toEqual([]);
+  });
+
   test("builds an assistant message from item start and deltas", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/started",
       params: {
@@ -275,6 +296,7 @@ describe("WebState", () => {
 
   test("bounds command output and marks truncation explicitly", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/started",
       params: {
@@ -304,6 +326,7 @@ describe("WebState", () => {
 
   test("bounds oversized content present in an initial item notification", () => {
     const state = new WebState("windows");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/started",
       params: {
@@ -351,6 +374,7 @@ describe("WebState", () => {
 
   test("interrupts active work and pending approvals after app-server exit", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "turn/started",
       params: { threadId: "t1", turn: { id: "turn1" } },
@@ -387,6 +411,7 @@ describe("WebState", () => {
 
   test("bounds live reasoning summaries", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/completed",
       params: {
@@ -603,6 +628,37 @@ describe("WebState", () => {
     });
   });
 
+  test("keeps the validated display cwd when a native update uses its canonical alias", () => {
+    const state = new WebState("macos");
+    state.setThreads([{
+      id: "t1",
+      title: "Task",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 1,
+      cwd: "/var/work",
+      canAcceptDirectInput: true,
+    }]);
+    state.loadThread("t1", [], undefined, { threadId: "t1", mode: "readWrite" });
+
+    state.applyNotification({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "t1",
+          name: "Task",
+          preview: "",
+          createdAt: 1,
+          updatedAt: 2,
+          cwd: "/private/var/work",
+          canAcceptDirectInput: true,
+        },
+      },
+    });
+
+    expect(state.snapshot().threads[0]?.cwd).toBe("/var/work");
+  });
+
   test("clears stale task runtime even when reloading the same thread", () => {
     const state = new WebState("macos");
     state.loadThread("thread-a", []);
@@ -625,8 +681,21 @@ describe("WebState", () => {
     expect(state.snapshot()).not.toHaveProperty("turnDiff");
   });
 
+  test("revokes loaded write access while the app-server reconnects", () => {
+    const state = new WebState("windows");
+    state.loadThread("thread-a", [], undefined, {
+      threadId: "thread-a",
+      mode: "readWrite",
+    });
+
+    state.clearThreadAccess();
+
+    expect(state.snapshot().threadAccess).toBeUndefined();
+  });
+
   test("applies current file patch and turn error notifications", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/fileChange/patchUpdated",
       params: {

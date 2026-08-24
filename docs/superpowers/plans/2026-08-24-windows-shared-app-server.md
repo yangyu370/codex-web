@@ -293,7 +293,7 @@ expect(state.snapshot().threadAccess).toEqual({
 
 - [x] **Step 4: Run focused client tests, typecheck, and build; expect PASS.**
 
-- [ ] **Step 5: Commit with `git commit -m "feat: show shared and history only task access"`.**
+- [x] **Step 5: Commit with `git commit -m "feat: show shared and history only task access"`.**
 
 ### Task 9: End-to-End Coverage, Smoke Test, Documentation, and Rollout
 
@@ -309,16 +309,16 @@ expect(state.snapshot().threadAccess).toEqual({
 - Produces: fake multi-client WebSocket app-server and private active-writer modes.
 - Produces: `CODEX_WEB_SMOKE_WINDOWS=1 bun run test:smoke:windows-shared`.
 
-- [ ] **Step 1: Extend the fake server with loopback WebSocket multi-client notifications, active writer rejection, thread/read updates, and disconnect survival.**
+- [x] **Step 1: Extend the fake server with loopback WebSocket multi-client notifications, active writer rejection, thread/read updates, and disconnect survival.**
 
-- [ ] **Step 2: Add Playwright cases** for CLI-first, Web-first, bidirectional input, approvals, interruption, Web disconnect survival, ordinary CLI read-only monitoring, and later read-write transition.
+- [x] **Step 2: Add Playwright cases** for CLI-first, Web-first, bidirectional input, approvals, interruption, Web disconnect survival, ordinary CLI read-only monitoring, and later read-write transition.
 
-- [ ] **Step 3: Add an opt-in Windows smoke script using isolated `CODEX_HOME`, an unused loopback port, explicit owned cleanup, one minimal model turn, and temporary thread archival.**
+- [x] **Step 3: Add an opt-in Windows smoke script using isolated `CODEX_HOME`, an unused loopback port, explicit owned cleanup, two minimal cross-client model turns, and temporary thread archival.**
 
-- [ ] **Step 4: Update README with wrapper usage, management commands, `auto|required|off`, loopback-only Cloudflare warning, version mismatch guidance, and the distinction between wrapper-started live tasks and ordinary read-only tasks.**
+- [x] **Step 4: Update README with wrapper usage, management commands, `auto|required|off`, loopback-only Cloudflare warning, version mismatch guidance, and the distinction between wrapper-started live tasks and ordinary read-only tasks.**
 
-- [ ] **Step 5: Run `bun install --frozen-lockfile`, `bun run typecheck`, `bun test`, `bun run build`, and `bun run test:e2e`; expect all required gates PASS.**
+- [x] **Step 5: Run `bun install --frozen-lockfile`, `bun run typecheck`, `bun test`, `bun run build`, and `bun run test:e2e`; expect all required gates PASS.**
 
-- [ ] **Step 6: Run `git diff --check`, inspect `git status --short`, and verify only feature/spec/plan changes are included.**
+- [x] **Step 6: Run `git diff --check`, inspect `git status --short`, and verify only feature/spec/plan changes are included.**
 
-- [ ] **Step 7: Commit with `git commit -m "test: verify windows shared cli handoff"`.**
+- [x] **Step 7: Commit with `git commit -m "test: verify windows shared cli handoff"`.**

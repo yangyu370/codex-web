@@ -2,7 +2,7 @@
 
 在 macOS 或 Windows 上用浏览器管理本机 Codex。
 
-Codex Web 在运行 Codex 的电脑上启动一个 Bun 服务。macOS 会优先连接由 Codex Web 管理的共享 `codex app-server` 守护进程，让之后启动的 CLI 任务可以被网页实时接管；浏览器只连接 Codex Web，不直接接触原始 app-server 协议。
+Codex Web 在运行 Codex 的电脑上启动一个 Bun 服务。macOS 连接 Codex 原生 daemon；Windows 由项目管理一个仅监听回环地址的共享 `codex app-server`。通过配套脚本启动的 CLI 和 Web 可以连接同一个 app-server；浏览器始终只连接 Codex Web，不直接接触原始 app-server 协议。
 
 > 这是一个非官方项目，与 OpenAI 没有关联。当前版本面向个人使用，Linux 和 WSL 暂不支持。
 
@@ -56,23 +56,41 @@ bun install
 .\scripts\start-windows.ps1
 ```
 
+需要让新的 Windows CLI 任务与 Web 实时互通时，用项目提供的包装脚本启动 Codex：
+
+```powershell
+.\scripts\codex-web-cli.ps1
+```
+
+Codex 的原有参数可以直接放在后面，例如：
+
+```powershell
+.\scripts\codex-web-cli.ps1 resume --last
+```
+
+包装脚本会确认共享 app-server 已就绪，再把经过校验的本地 endpoint 交给 `codex --remote`。它不会改写 Codex 配置、Shell Profile 或 `PATH`。为避免 endpoint 被替换，不能自行传入 `--remote` 或 `--remote-auth-token-env`。
+
 启动完成后访问 [http://127.0.0.1:4173](http://127.0.0.1:4173)。启动脚本会先构建前端，再启动服务；它不会安装或升级 Bun、Codex，也不会修改现有的 `CODEX_HOME`。
 
-### macOS 实时接管顺序
+### CLI 与 Web 实时接管
 
-需要从 CLI 切换到 Web 继续时，请先启动 Codex Web，再启动新的 Codex CLI 会话：
+Windows 的包装脚本和 Codex Web 都会按需启动同一个共享 app-server，因此 CLI-first 和 Web-first 都可以：
 
 ```text
-Codex Web / 共享 app-server → Codex CLI → Web 中选择带 LIVE · CLI 标记的任务
+CLI-first: codex-web-cli.ps1 → 稍后启动 Codex Web → 选择 LIVE · CLI 任务
+Web-first: Codex Web → codex-web-cli.ps1 → 选择 LIVE · CLI 任务
 ```
+
+Windows 共享模式要求 `codex-cli 0.149.1` 或更高版本；更旧的版本会在 `auto` 下退回私有 app-server，在 `required` 下直接报告不兼容。
 
 Web 会在窗口重新获得焦点时刷新任务目录，并持续接收共享会话事件。Web、CLI 中任一端均可继续输入、处理中断和审批；已被另一端处理的审批会作为正常同步竞争刷新，不会显示成致命错误。
 
-当前边界：
+平台实现：
 
-- macOS：支持共享守护进程下 CLI ↔ Web 实时接管；共享模式不可用时自动退回独立 app-server。
-- Windows：继续使用独立 app-server，可查看本机历史任务，但不承诺 CLI 实时接管。
-- Codex Desktop 创建的任务：当前为历史查看模式，不显示为 LIVE，也不能由 Web 继续输入。
+- macOS：保留 Codex 原生 daemon，不在 Web 项目里复制进程协调逻辑。
+- Windows：默认自动复用或启动项目管理的共享 TCP app-server；共享启动失败时可以退回 Web 私有的 app-server。
+- 通过 `codex-web-cli.ps1` 启动并成功连接共享 app-server 的任务：CLI 与 Web 均可继续输入、处理中断和审批。
+- 直接运行普通 `codex`、Codex Desktop 或其他私有 writer 创建的任务：writer 存活时 Web 显示 `READ ONLY · LOCAL CLI`，每三秒刷新历史；关闭原客户端后可再次选择任务尝试取得读写权限。
 
 任务的权限和思考强度来自 Codex 原生元数据。运行中的修改从下一回合生效；Web 只把成功选择保存为新任务默认值，不覆盖 Codex 的全局配置。
 
@@ -85,6 +103,25 @@ CODEX_WEB_CODEX_EXECUTABLE=/absolute/path/to/codex ./scripts/start-macos.sh
 ```powershell
 $env:CODEX_WEB_CODEX_EXECUTABLE = 'C:\absolute\path\to\codex.exe'
 .\scripts\start-windows.ps1
+```
+
+### Windows 共享 app-server 管理
+
+可单独查看或管理共享进程：
+
+```powershell
+.\scripts\windows-shared-app-server.ps1 start
+.\scripts\windows-shared-app-server.ps1 status
+.\scripts\windows-shared-app-server.ps1 restart
+.\scripts\windows-shared-app-server.ps1 stop
+```
+
+生命周期文件按 `CODEX_HOME` 隔离。`stop` 和 `restart` 会核对 endpoint、进程租约和 generation，不会因为端口被占用就终止未知进程。
+
+如果 CLI 已升级而共享 app-server 仍是旧版本，Web 会继续使用当前进程并提示需要重启。确认没有依赖该共享进程的任务后运行：
+
+```powershell
+.\scripts\windows-shared-app-server.ps1 restart
 ```
 
 ## 选择服务端项目目录
@@ -130,6 +167,8 @@ $env:CODEX_WEB_BROWSE_ROOTS = 'D:\Projects;\\server\share\work'
 
 Codex Web 始终只监听 `127.0.0.1`。远程模式需要由你自己配置 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) 和 Cloudflare Access，不能直接把本地端口暴露到公网。
 
+Cloudflare Tunnel 只能转发 Codex Web 的 HTTP 端口（默认 `4173`）。不要转发 Windows 原生 app-server 端口（默认 `4500`）；它使用无认证的本地 `ws`，并且只允许配置为字面量 `127.0.0.1` 或 `::1`。
+
 启动前设置以下变量：
 
 ```text
@@ -151,6 +190,22 @@ CODEX_WEB_PUBLIC_URL=https://codex.example.com
 | `CODEX_WEB_BROWSE_ROOTS` | 用户主目录 | 额外允许浏览的服务端根目录 |
 | `CODEX_WEB_LOCAL_ORIGINS` | `127.0.0.1:4173` 和开发端口 | 本地模式允许的浏览器 Origin，逗号分隔 |
 | `CODEX_WEB_AUTH_MODE` | `local` | `local` 或 `remote` |
+| `CODEX_WEB_WINDOWS_SHARED` | `auto` | Windows 共享策略：`auto`、`required` 或 `off` |
+| `CODEX_WEB_APP_SERVER_URL` | `ws://127.0.0.1:4500` | Windows 共享 app-server 的字面量回环地址 |
+
+Windows 策略含义：
+
+- `auto`：优先共享；启动或握手失败时记录诊断并退回 Web 私有 app-server。
+- `required`：必须使用共享模式；失败时 Web 保持不可用，以便部署脚本及时发现配置问题。
+- `off`：不启动或连接共享进程，始终使用 Web 私有 app-server。
+
+PowerShell 示例：
+
+```powershell
+$env:CODEX_WEB_WINDOWS_SHARED = 'required'
+$env:CODEX_WEB_APP_SERVER_URL = 'ws://127.0.0.1:4500'
+.\scripts\start-windows.ps1
+```
 
 修改代码或更新版本后，请重启启动脚本，再刷新浏览器。如果前端和后端协议版本不一致，页面会显示明确的重启提示。
 
@@ -185,9 +240,17 @@ bun run test:e2e
 CODEX_WEB_SMOKE=1 bun run test:smoke:daemon
 ```
 
+Windows 也提供可选的原生冒烟测试。它使用隔离的临时 `CODEX_HOME`、随机空闲回环端口和两个最小模型回合，验证两个真实客户端之间的观察、续写和断线存活，会产生少量模型用量；结束时归档临时任务、验证并停止测试拥有的共享 host，然后删除临时目录：
+
+```powershell
+$env:CODEX_WEB_SMOKE_WINDOWS = '1'
+bun run test:smoke:windows-shared
+```
+
 ## 安全说明
 
 - 服务只监听回环地址，不接受配置为公网监听地址。
+- Windows 原生 app-server 端口同样只允许字面量回环地址，不能经 Tunnel、反向代理或防火墙规则对外暴露。
 - 浏览器请求和 WebSocket 连接都会经过同源或 Access 身份校验。
 - 浏览器协议只暴露 Web UI 需要的归一化数据，不转发原始 app-server 消息。
 - 上传、设置、日志、历史记录和实时事件都有大小或数量上限。

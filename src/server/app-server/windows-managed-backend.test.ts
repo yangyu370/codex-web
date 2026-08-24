@@ -6,6 +6,10 @@ import {
   parseWindowsSharedPolicy,
   WindowsManagedBackend,
 } from "./windows-managed-backend";
+import {
+  appServerVersionFromInitialize,
+  codexVersionAtLeast,
+} from "./windows-version";
 
 describe("parseWindowsSharedPolicy", () => {
   test("defaults to auto and accepts the three supported policies", () => {
@@ -32,13 +36,13 @@ test("WindowsManagedBackend returns managed TCP connection metadata", async () =
         endpoint: "ws://127.0.0.1:4600",
         codexHome: "C:\\Users\\dev\\.codex",
         executable: "C:\\Tools\\codex.exe",
-        cliVersion: "codex-cli 0.149.1",
+        cliVersion: "codex-cli 0.150.0",
       });
       return {
         ensure: async () => ({
           endpoint: options.endpoint,
           cliVersion: options.cliVersion,
-          appServerVersion: "codex-cli 0.148.0",
+          appServerVersion: "codex-cli 0.149.1",
           restartRequired: true,
           hostPid: 101,
           nativePid: 102,
@@ -50,18 +54,36 @@ test("WindowsManagedBackend returns managed TCP connection metadata", async () =
 
   await expect(backend.ensureAndConnect({
     executable: "C:\\Tools\\codex.exe",
-    cliVersion: "codex-cli 0.149.1",
+    cliVersion: "codex-cli 0.150.0",
     env: {},
   })).resolves.toEqual({
     info: {
       backend: "managedTcp",
       endpoint: { kind: "tcp", url: "ws://127.0.0.1:4600" },
-      cliVersion: "codex-cli 0.149.1",
-      appServerVersion: "codex-cli 0.148.0",
+      cliVersion: "codex-cli 0.150.0",
+      appServerVersion: "codex-cli 0.149.1",
       restartRequired: true,
     },
     transport,
   });
+});
+
+test("Windows shared mode enforces the first compatible Codex version", async () => {
+  expect(codexVersionAtLeast("codex-cli 0.149.1", "0.149.1")).toBeTrue();
+  expect(codexVersionAtLeast("codex-cli 0.149.0", "0.149.1")).toBeFalse();
+  expect(appServerVersionFromInitialize({
+    userAgent: "codex-web-lifecycle/0.150.2 (Windows 11; x86_64) codex_cli_rs/0.150.2",
+  })).toBe("codex-cli 0.150.2");
+
+  const backend = new WindowsManagedBackend(platform(), {
+    env: {},
+    coordinatorFactory: () => ({ ensure: async () => { throw new Error("must not start"); } }),
+  });
+  await expect(backend.ensureAndConnect({
+    executable: "C:\\Tools\\codex.exe",
+    cliVersion: "codex-cli 0.149.0",
+    env: {},
+  })).rejects.toThrow("0.149.1 or newer");
 });
 
 function platform(): HostPlatform {

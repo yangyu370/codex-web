@@ -47,6 +47,7 @@ function readyAdapter(): CodexAdapter {
 
 const attachments = new AttachmentStore(platform, platform.dataDirectory());
 const coordinator = new TurnCoordinator(state, attachments, readyAdapter);
+let threadAccess: ThreadAccessController;
 const history = new HistoryThreadRefresher<ThreadHistoryProjection>({
   read: (threadId) => readyAdapter().readThreadHistory(threadId),
   project: (threadId, projection) => {
@@ -55,6 +56,13 @@ const history = new HistoryThreadRefresher<ThreadHistoryProjection>({
     readyAdapter().projectThreadHistory(projection, access, true);
   },
   signature: (projection) => JSON.stringify(projection),
+  retryOpen: async (threadId) => {
+    const selected = state.snapshot().threadAccess;
+    if (selected?.threadId !== threadId || selected.mode !== "historyOnly") return;
+    await threadAccess.open(threadId);
+    const current = state.snapshot().threadAccess;
+    if (current?.threadId === threadId) history.select(current);
+  },
   onError: (error) => state.addDiagnostic(`history refresh: ${error.message}`),
 });
 const catalog = new ThreadCatalogRefresher(
@@ -64,9 +72,11 @@ const catalog = new ThreadCatalogRefresher(
     onUpdated: (value) => history.catalogUpdated(value.data),
   },
 );
-const threadAccess = new ThreadAccessController({
-  resumeThread: (threadId, access) => readyAdapter().resumeThread(threadId, access),
-  readThread: (threadId, access) => readyAdapter().readThread(threadId, access),
+threadAccess = new ThreadAccessController({
+  resumeThread: (threadId, access, isCurrent) =>
+    readyAdapter().resumeThread(threadId, access, isCurrent),
+  readThread: (threadId, access, isCurrent) =>
+    readyAdapter().readThread(threadId, access, isCurrent),
 });
 
 const actions: BrowserActions = {
@@ -82,6 +92,7 @@ const actions: BrowserActions = {
     };
   },
   startThread: async (params) => {
+    threadAccess.invalidate();
     history.select(undefined);
     const thread = await readyAdapter().startThread(params);
     history.select(state.snapshot().threadAccess);
@@ -90,16 +101,19 @@ const actions: BrowserActions = {
   openThread: async (threadId) => {
     history.select(undefined);
     const opened = await threadAccess.open(threadId);
-    history.select(opened.access);
+    const currentAccess = state.snapshot().threadAccess;
+    if (currentAccess?.threadId === threadId) history.select(currentAccess);
     return opened;
   },
   resumeThread: async (threadId) => {
+    threadAccess.invalidate();
     history.select(undefined);
     const thread = await readyAdapter().resumeThread(threadId);
     history.select(state.snapshot().threadAccess);
     return thread;
   },
   readThread: async (threadId) => {
+    threadAccess.invalidate();
     history.select(undefined);
     const thread = await readyAdapter().readThread(threadId);
     history.select(state.snapshot().threadAccess);
@@ -177,7 +191,9 @@ manager.onState((snapshot) => {
     return;
   }
   adapter = undefined;
+  threadAccess.invalidate();
   history.select(undefined);
+  state.clearThreadAccess();
   state.interruptActiveWork();
   const diagnosticId = snapshot.error ? crypto.randomUUID() : undefined;
   if (snapshot.error && diagnosticId) {
