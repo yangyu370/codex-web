@@ -149,7 +149,7 @@ expect(fakeHost.terminated).toEqual([]);
 
 - [x] **Step 6: Run coordinator, transport, platform runtime tests, and typecheck; expect PASS.**
 
-- [ ] **Step 7: Commit with `git commit -m "feat: coordinate windows shared app server"`.**
+- [x] **Step 7: Commit with `git commit -m "feat: coordinate windows shared app server"`.**
 
 ### Task 4: Windows Backend Selection, Policy, and Reconnect
 
@@ -167,15 +167,15 @@ expect(fakeHost.terminated).toEqual([]);
 - Produces: `parseWindowsSharedPolicy(value): "auto" | "required" | "off"`.
 - Produces: service fields `cliVersion?`, `appServerVersion?`, `restartRequired?`.
 
-- [ ] **Step 1: Write failing tests** for `auto` success/fallback, `required` fatal readiness, `off` embedded behavior, reconnect after shared close, and Web shutdown detaching without interrupting.
+- [x] **Step 1: Write failing tests** for `auto` success/fallback, `required` fatal readiness, `off` embedded behavior, reconnect after shared close, and Web shutdown detaching without interrupting.
 
-- [ ] **Step 2: Run focused tests and verify the expected policy/backend failures.**
+- [x] **Step 2: Run focused tests and verify the expected policy/backend failures.**
 
-- [ ] **Step 3: Implement `WindowsManagedBackend` and select it only on Windows when policy is not `off`; keep all platform branching in backend selection.**
+- [x] **Step 3: Implement `WindowsManagedBackend` and select it only on Windows when policy is not `off`; keep all platform branching in backend selection.**
 
-- [ ] **Step 4: Update process snapshots and normalized service state without exposing backend endpoints or lifecycle metadata.**
+- [x] **Step 4: Update process snapshots and normalized service state without exposing backend endpoints or lifecycle metadata.**
 
-- [ ] **Step 5: Run focused tests, protocol tests, and typecheck; expect PASS.**
+- [x] **Step 5: Run focused tests, protocol tests, and typecheck; expect PASS.**
 
 - [ ] **Step 6: Commit with `git commit -m "feat: select shared backend by platform"`.**
 

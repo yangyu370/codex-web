@@ -2,6 +2,7 @@ import type { HostPlatform } from "../platform";
 import type { DaemonConnectionInfo } from "./daemon";
 import type { JsonRpcTransport } from "./json-rpc";
 import { MacNativeDaemonBackend } from "./macos-daemon-backend";
+import { WindowsManagedBackend } from "./windows-managed-backend";
 
 export type SharedBackendKind = "nativeDaemon" | "managedTcp";
 export type WindowsSharedPolicy = "auto" | "required" | "off";
@@ -54,5 +55,9 @@ export function selectSharedAppServerBackend(
     });
   }
   if (options.windowsPolicy === "off") return undefined;
-  return options.windowsBackend;
+  if (options.windowsBackend) return options.windowsBackend;
+  if (options.windowsPolicy === "auto" || options.windowsPolicy === "required") {
+    return new WindowsManagedBackend(platform, { env: options.env });
+  }
+  return undefined;
 }

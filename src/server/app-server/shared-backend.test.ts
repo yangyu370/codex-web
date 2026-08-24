@@ -44,4 +44,11 @@ describe("selectSharedAppServerBackend", () => {
       windowsBackend: unexpected,
     })).toBeUndefined();
   });
+
+  test("selects the managed TCP backend for Windows auto mode", () => {
+    expect(selectSharedAppServerBackend(platform("windows"), {
+      env: {},
+      windowsPolicy: "auto",
+    })?.kind).toBe("managedTcp");
+  });
 });

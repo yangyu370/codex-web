@@ -220,6 +220,26 @@ describe("AppServerProcessManager", () => {
     });
   });
 
+  test("required Windows shared mode does not fall back to embedded stdio", async () => {
+    const platform = fakePlatform([]);
+    let embeddedStarts = 0;
+    platform.spawnAppServer = () => {
+      embeddedStarts += 1;
+      throw new Error("must not start embedded");
+    };
+    const manager = new AppServerProcessManager(platform, {
+      version: async () => "codex-cli 0.149.1",
+      windowsPolicy: "required",
+      sharedBackend: {
+        kind: "managedTcp",
+        ensureAndConnect: async () => { throw new Error("shared unavailable"); },
+      },
+    });
+
+    await expect(manager.start()).rejects.toThrow("shared unavailable");
+    expect(embeddedStarts).toBe(0);
+  });
+
   test("reconnects the shared daemon with bounded backoff", async () => {
     const first = new MemoryTransport();
     const second = new MemoryTransport();

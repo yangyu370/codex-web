@@ -53,6 +53,7 @@ export class AppServerProcessManager {
   readonly #platform: HostPlatform;
   readonly #options: AppServerProcessManagerOptions;
   readonly #sharedBackend?: SharedAppServerBackend;
+  readonly #sharedRequired: boolean;
   readonly #stateListeners = new Set<(state: AppServerProcessSnapshot) => void>();
   #snapshot: AppServerProcessSnapshot = { status: "starting" };
   #child?: AppServerProcess;
@@ -69,6 +70,7 @@ export class AppServerProcessManager {
   constructor(platform: HostPlatform, options: AppServerProcessManagerOptions = {}) {
     this.#platform = platform;
     this.#options = options;
+    this.#sharedRequired = platform.kind === "windows" && options.windowsPolicy === "required";
     this.#sharedBackend = options.sharedBackend ?? selectSharedAppServerBackend(
       platform,
       {
@@ -176,6 +178,7 @@ export class AppServerProcessManager {
         this.#peer?.close(new Error("shared app-server initialization failed"));
         this.#peer = undefined;
         this.#sharedTransport = undefined;
+        if (this.#sharedRequired) throw error;
       }
     }
     return this.#launchEmbedded(executable, codexVersion, sharedFailure);

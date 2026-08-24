@@ -221,6 +221,9 @@ export interface BrowserSnapshot {
     status: "starting" | "ready" | "restarting" | "unavailable";
     platform: "macos" | "windows";
     codexVersion?: string;
+    cliVersion?: string;
+    appServerVersion?: string;
+    restartRequired?: boolean;
     error?: WebError;
     liveHandoff?: "available" | "unavailable";
   };

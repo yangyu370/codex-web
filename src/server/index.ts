@@ -3,6 +3,7 @@ import { MAX_BROWSER_MESSAGE_BYTES } from "../shared/protocol";
 
 import { CodexAdapter } from "./app-server/adapter";
 import { AppServerProcessManager, shouldInterruptOnWebShutdown } from "./app-server/process-manager";
+import { parseWindowsSharedPolicy } from "./app-server/windows-managed-backend";
 import { parseAuthConfig } from "./auth/config";
 import { selectHostPlatform } from "./platform";
 import { createSystemRuntime } from "./platform/system-runtime";
@@ -24,6 +25,9 @@ const state = new WebState(platform.kind, (type, payload) => localLog.append(typ
 const manager = new AppServerProcessManager(platform, {
   configuredExecutable: process.env.CODEX_WEB_CODEX_EXECUTABLE,
   env: environmentStrings(process.env),
+  windowsPolicy: platform.kind === "windows"
+    ? parseWindowsSharedPolicy(process.env.CODEX_WEB_WINDOWS_SHARED)
+    : undefined,
 });
 let adapter: CodexAdapter | undefined;
 const directories = new DirectoryService(
@@ -120,6 +124,9 @@ manager.onState((snapshot) => {
       state.setService({
         status: "ready",
         ...(snapshot.codexVersion ? { codexVersion: snapshot.codexVersion } : {}),
+        ...(snapshot.cliVersion ? { cliVersion: snapshot.cliVersion } : {}),
+        ...(snapshot.appServerVersion ? { appServerVersion: snapshot.appServerVersion } : {}),
+        ...(snapshot.restartRequired ? { restartRequired: true } : {}),
         ...(snapshot.liveHandoff ? { liveHandoff: snapshot.liveHandoff } : {}),
       });
     });
@@ -134,6 +141,9 @@ manager.onState((snapshot) => {
   state.setService({
     status: snapshot.status,
     ...(snapshot.codexVersion ? { codexVersion: snapshot.codexVersion } : {}),
+    ...(snapshot.cliVersion ? { cliVersion: snapshot.cliVersion } : {}),
+    ...(snapshot.appServerVersion ? { appServerVersion: snapshot.appServerVersion } : {}),
+    ...(snapshot.restartRequired ? { restartRequired: true } : {}),
     ...(snapshot.liveHandoff ? { liveHandoff: snapshot.liveHandoff } : {}),
     ...(snapshot.error
       ? {
