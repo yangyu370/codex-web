@@ -211,6 +211,15 @@ describe("live client workflows", () => {
         ...emptySnapshot,
       sequence: 2,
       loadedThreadId: "t1",
+      threadAccess: { threadId: "t1", mode: "readWrite" },
+      threads: [{
+        id: "t1",
+        title: "Live task",
+        preview: "",
+        createdAt: 1,
+        updatedAt: 2,
+        canAcceptDirectInput: true,
+      }],
       activeTurn: { id: "turn1", threadId: "t1", status: "inProgress" },
         visibleItems: [
           { id: "a1", type: "message", role: "assistant", text: "Tests are running" },
@@ -343,6 +352,7 @@ describe("live client workflows", () => {
         { id: ":workspace", allowed: true },
       ],
       loadedThreadId: "cli-1",
+      threadAccess: { threadId: "cli-1", mode: "readWrite" },
       threads: [{
         id: "cli-1",
         title: "CLI task",

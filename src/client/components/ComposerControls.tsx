@@ -24,6 +24,7 @@ interface ComposerControlsProps {
   permissionProfiles: PermissionProfileSummary[];
   permissionProfile?: string;
   disabled?: boolean;
+  disabledReason?: string;
   pending?: "effort" | "permissionProfile";
   showModel?: boolean;
   running?: boolean;
@@ -129,6 +130,7 @@ export function ComposerControls({
   permissionProfiles,
   permissionProfile,
   disabled = false,
+  disabledReason,
   pending,
   showModel = true,
   running = false,
@@ -273,7 +275,7 @@ export function ComposerControls({
             else openMenuAt("model", trigger);
           }}
           open={modelMenuOpen}
-          title={selectedModel?.description ?? selectedModel?.displayName ?? "Select the model for this task"}
+          title={disabled && disabledReason ? disabledReason : selectedModel?.description ?? selectedModel?.displayName ?? "Select the model for this task"}
           triggerRef={modelMenu.triggerRef}
         >
           <MenuShell
@@ -328,7 +330,7 @@ export function ComposerControls({
           else openMenuAt("effort", trigger);
         }}
         open={effortMenuOpen}
-        title={effortTitle}
+        title={disabled && disabledReason ? disabledReason : effortTitle}
         triggerRef={effortMenu.triggerRef}
       >
         <MenuShell
@@ -385,7 +387,7 @@ export function ComposerControls({
           else openMenuAt("permission", trigger);
         }}
         open={permissionMenuOpen}
-        title={permissionTitle}
+        title={disabled && disabledReason ? disabledReason : permissionTitle}
         triggerRef={permissionMenu.triggerRef}
       >
         <MenuShell

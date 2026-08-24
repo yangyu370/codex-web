@@ -185,6 +185,37 @@ describe("CodexWebClient", () => {
     expect(client.getSnapshot()).not.toHaveProperty("review");
   });
 
+  test("projects thread access from loaded and access-only events", () => {
+    const socket = new FakeSocket();
+    const client = new CodexWebClient(snapshot, () => socket);
+    client.connect();
+    socket.open();
+
+    socket.receive({
+      kind: "event",
+      sequence: 20,
+      type: "thread.loaded",
+      payload: {
+        threadId: "t1",
+        items: [],
+        threadAccess: { threadId: "t1", mode: "historyOnly", reason: "activeWriter" },
+      },
+    });
+    expect(client.getSnapshot().threadAccess).toEqual({
+      threadId: "t1",
+      mode: "historyOnly",
+      reason: "activeWriter",
+    });
+
+    socket.receive({
+      kind: "event",
+      sequence: 21,
+      type: "thread.access.updated",
+      payload: { threadAccess: { threadId: "t1", mode: "readWrite" } },
+    });
+    expect(client.getSnapshot().threadAccess).toEqual({ threadId: "t1", mode: "readWrite" });
+  });
+
   test("ignores replayed events at or behind the authoritative sequence", () => {
     const socket = new FakeSocket();
     const client = new CodexWebClient({ ...snapshot, sequence: 7 }, () => socket);

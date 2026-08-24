@@ -268,7 +268,7 @@ expect(state.snapshot().threadAccess).toEqual({
 
 - [x] **Step 5: Run refresher, catalog, server, and gateway tests; expect PASS.**
 
-- [ ] **Step 6: Commit with `git commit -m "feat: refresh history only cli threads"`.**
+- [x] **Step 6: Commit with `git commit -m "feat: refresh history only cli threads"`.**
 
 ### Task 8: Read-Only and Shared UI Projection
 
@@ -285,13 +285,13 @@ expect(state.snapshot().threadAccess).toEqual({
 - Consumes: normalized `threadAccess` and `service.liveHandoff` only.
 - Produces: `LIVE · CLI`, `READ ONLY · LOCAL CLI`, history-only banner, disabled controls, and `Shared Codex`/`Local Codex` service labels.
 
-- [ ] **Step 1: Write failing Testing Library tests** for badges, banner copy, disabled composer/settings/review/approval/interrupt actions, tooltip reasons, keyboard accessibility, and mobile/desktop rendering without color-only meaning.
+- [x] **Step 1: Write failing Testing Library tests** for badges, banner copy, disabled composer/settings/review/approval/interrupt actions, tooltip reasons, keyboard accessibility, and mobile/desktop rendering without color-only meaning.
 
-- [ ] **Step 2: Run focused client tests and verify missing projection failures.**
+- [x] **Step 2: Run focused client tests and verify missing projection failures.**
 
-- [ ] **Step 3: Change selection to send `thread.open`, derive all mutability from `threadAccess`, and render the approved labels/copy.**
+- [x] **Step 3: Change selection to send `thread.open`, derive all mutability from `threadAccess`, and render the approved labels/copy.**
 
-- [ ] **Step 4: Run focused client tests, typecheck, and build; expect PASS.**
+- [x] **Step 4: Run focused client tests, typecheck, and build; expect PASS.**
 
 - [ ] **Step 5: Commit with `git commit -m "feat: show shared and history only task access"`.**
 

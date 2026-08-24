@@ -105,6 +105,9 @@ export function App({
     () => visibleSnapshot.threads.find((entry) => entry.id === visibleSnapshot.loadedThreadId),
     [visibleSnapshot.loadedThreadId, visibleSnapshot.threads],
   );
+  const threadAccess = visibleSnapshot.threadAccess?.threadId === visibleSnapshot.loadedThreadId
+    ? visibleSnapshot.threadAccess
+    : undefined;
   const running = visibleSnapshot.activeTurn?.status === "inProgress";
   const attachmentBlocked = draftAttachments.some((attachment) => attachment.status !== "ready");
   const loadedSettings = visibleSnapshot.threadSettings;
@@ -119,7 +122,15 @@ export function App({
   const effectiveEffortSelection = effortOptions.some((entry) => entry.id === effectiveEffort)
     ? effectiveEffort
     : effectiveModelEntry?.defaultReasoningEffort ?? effortOptions[0]?.id;
-  const historyOnly = Boolean(visibleSnapshot.loadedThreadId) && thread?.canAcceptDirectInput !== true;
+  const historyOnly = threadAccess?.mode === "historyOnly";
+  const historyOnlyReason = historyOnly ? historyOnlyMessage(threadAccess.reason) : undefined;
+  const loadedWritable = Boolean(visibleSnapshot.loadedThreadId) &&
+    threadAccess?.mode === "readWrite" && thread?.canAcceptDirectInput === true;
+  const loadedReadOnly = Boolean(visibleSnapshot.loadedThreadId) && !loadedWritable;
+  const mutationDisabledReason = historyOnlyReason ?? (loadedReadOnly
+    ? "This task is not available for direct input."
+    : undefined);
+  const controlsDisabled = visibleSnapshot.service.status !== "ready" || loadedReadOnly;
 
   useEffect(() => {
     if (!client) return undefined;
@@ -350,6 +361,7 @@ export function App({
   }
 
   function interrupt() {
+    if (loadedReadOnly) return;
     onInterrupt?.();
     if (client && snapshot.activeTurn) {
       void client.request("turn.interrupt", {
@@ -360,6 +372,7 @@ export function App({
   }
 
   function resolveApproval(id: string, decision: string) {
+    if (loadedReadOnly) return;
     onResolveApproval?.(id, decision);
     if (client) {
       void client
@@ -446,18 +459,19 @@ export function App({
 
   const reviewRunning = visibleSnapshot.review?.status === "inProgress";
   const reviewEnabled = Boolean(visibleSnapshot.loadedThreadId) &&
-    visibleSnapshot.service.status === "ready" && !running && thread?.canAcceptDirectInput === true;
-  const reviewDisabledReason = reviewRunning
-    ? "Review is already running"
+    visibleSnapshot.service.status === "ready" && !running && loadedWritable;
+  const reviewDisabledReason = historyOnlyReason
+    ?? (reviewRunning
+      ? "Review is already running"
     : !visibleSnapshot.loadedThreadId
       ? "Open an idle task to review changes"
       : visibleSnapshot.service.status !== "ready"
         ? "Codex is not ready"
         : running
           ? "Wait for the active turn to finish"
-          : thread?.canAcceptDirectInput !== true
-            ? "This task is available as history only"
-            : undefined;
+          : !loadedWritable
+            ? "This task is not available for direct input"
+            : undefined);
 
   return (
     <div className="app-shell" data-mobile-view={mobileView}>
@@ -472,6 +486,7 @@ export function App({
         query={query}
         selectedId={visibleSnapshot.loadedThreadId}
         service={visibleSnapshot.service}
+        threadAccess={threadAccess}
         threads={visibleSnapshot.threads}
       />
       <section className="workspace">
@@ -480,10 +495,12 @@ export function App({
           cwd={cwd}
           model={snapshot.models.find((entry) => entry.id === effectiveModel)?.displayName ?? effectiveModel}
           onInterrupt={interrupt}
+          interruptDisabled={loadedReadOnly}
+          interruptDisabledReason={mutationDisabledReason}
           service={visibleSnapshot.service}
           threadTitle={thread?.title}
           controls={<TaskSettings
-            disabled={visibleSnapshot.service.status !== "ready" || historyOnly}
+            disabled={controlsDisabled}
             onReview={() => void startReview()}
             reviewDisabledReason={reviewDisabledReason}
             reviewEnabled={reviewEnabled}
@@ -498,6 +515,12 @@ export function App({
             ) : null}
           </div>
         ) : null}
+        {historyOnlyReason ? (
+          <div className="history-only-banner" id="history-only-banner" role="status">
+            <strong>Read-only monitor</strong>
+            <span>{historyOnlyReason}</span>
+          </div>
+        ) : null}
         <main>
           <Conversation items={visibleSnapshot.visibleItems} onOpenChanges={() => {
             setInspectorTab("changes");
@@ -505,7 +528,8 @@ export function App({
           }} />
           <Composer
             cwd={cwd}
-            disabled={visibleSnapshot.service.status !== "ready" || historyOnly}
+            disabled={controlsDisabled}
+            disabledReason={mutationDisabledReason}
             model={model}
             models={visibleSnapshot.models}
             efforts={effortOptions}
@@ -540,6 +564,8 @@ export function App({
           if (mobileView === "activity" || mobileView === "changes") setMobileView(tab);
         }}
         onResolveApproval={resolveApproval}
+        resolveDisabled={loadedReadOnly}
+        resolveDisabledReason={mutationDisabledReason}
         tokenUsage={visibleSnapshot.tokenUsage}
         turnDiff={visibleSnapshot.turnDiff}
       />
@@ -571,6 +597,19 @@ export function App({
       </nav>
     </div>
   );
+}
+
+function historyOnlyMessage(reason: NonNullable<BrowserSnapshot["threadAccess"]>["reason"]): string {
+  switch (reason) {
+    case "activeWriter":
+      return "This CLI task was not started in shared mode. You can monitor it here, but continue it from the local CLI.";
+    case "unsupportedSource":
+      return "This task source supports monitoring here, but not live control.";
+    case "sharedModeUnavailable":
+      return "Shared mode is unavailable. You can monitor this task here, but continue it from the local Codex client.";
+    default:
+      return "This task is available for monitoring only.";
+  }
 }
 
 function errorMessage(error: unknown): string {

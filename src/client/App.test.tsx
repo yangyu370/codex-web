@@ -189,14 +189,28 @@ describe("Codex web shell", () => {
     render(<App initialSnapshot={{
       ...emptySnapshot,
       loadedThreadId: "desktop-1",
+      threadAccess: {
+        threadId: "desktop-1",
+        mode: "historyOnly",
+        reason: "activeWriter",
+      },
       threads: [{
         id: "desktop-1",
         title: "Desktop history",
         preview: "Read only",
         createdAt: 1,
         updatedAt: 2,
-        canAcceptDirectInput: false,
-        source: "appServer",
+        canAcceptDirectInput: true,
+        source: "cli",
+      }],
+      activeTurn: { id: "turn-1", threadId: "desktop-1", status: "inProgress" },
+      pendingApprovals: [{
+        id: "approval-1",
+        kind: "command",
+        threadId: "desktop-1",
+        turnId: "turn-1",
+        availableDecisions: ["accept", "decline"],
+        status: "pending",
       }],
       threadSettings: {
         threadId: "desktop-1",
@@ -207,8 +221,34 @@ describe("Codex web shell", () => {
       },
     }} />);
 
+    const reason = "This CLI task was not started in shared mode. You can monitor it here, but continue it from the local CLI.";
+    expect(screen.getByRole("status").textContent).toContain(reason);
     expect((screen.getByRole("textbox", { name: "Message Codex" }) as HTMLTextAreaElement).disabled).toBe(true);
+    expect(screen.getByRole("textbox", { name: "Message Codex" }).getAttribute("title")).toBe(reason);
     expect((screen.getByRole("button", { name: "Reasoning effort" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Review changes" }) as HTMLButtonElement).title).toBe("This task is available as history only");
+    expect(screen.getByRole("button", { name: "Reasoning effort" }).getAttribute("title")).toBe(reason);
+    expect((screen.getByRole("button", { name: "Review changes" }) as HTMLButtonElement).title).toBe(reason);
+    expect(screen.getAllByRole("button", { name: "Stop" }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Decline" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("requires native direct-input capability even after a read-write open", () => {
+    render(<App initialSnapshot={{
+      ...emptySnapshot,
+      loadedThreadId: "thread-1",
+      threadAccess: { threadId: "thread-1", mode: "readWrite" },
+      threads: [{
+        id: "thread-1",
+        title: "Not writable yet",
+        preview: "",
+        createdAt: 1,
+        updatedAt: 2,
+        canAcceptDirectInput: false,
+      }],
+    }} />);
+
+    expect((screen.getByRole("textbox", { name: "Message Codex" }) as HTMLTextAreaElement).disabled).toBe(true);
+    expect(screen.queryByText(/not started in shared mode/i)).toBeNull();
   });
 });

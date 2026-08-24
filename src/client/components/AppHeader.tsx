@@ -8,6 +8,8 @@ interface AppHeaderProps {
   activeTurn: BrowserSnapshot["activeTurn"];
   threadTitle?: string;
   onInterrupt?: () => void;
+  interruptDisabled?: boolean;
+  interruptDisabledReason?: string;
   cwd: string;
   model: string;
   controls?: ReactNode;
@@ -18,6 +20,8 @@ export function AppHeader({
   activeTurn,
   threadTitle,
   onInterrupt,
+  interruptDisabled = false,
+  interruptDisabledReason,
   cwd,
   model,
   controls,
@@ -50,7 +54,7 @@ export function AppHeader({
           {service.codexVersion ?? service.platform}
         </span>
         {activeTurn?.status === "inProgress" ? (
-          <button className="interrupt-button" onClick={onInterrupt} type="button">
+          <button className="interrupt-button" disabled={interruptDisabled} onClick={onInterrupt} title={interruptDisabled ? interruptDisabledReason : "Stop the active turn"} type="button">
             <CircleStop size={14} />
             Stop
           </button>
