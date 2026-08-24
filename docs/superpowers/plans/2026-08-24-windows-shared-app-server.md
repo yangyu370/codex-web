@@ -245,7 +245,7 @@ expect(state.snapshot().threadAccess).toEqual({
 
 - [x] **Step 6: Run adapter/state/gateway/protocol tests and typecheck; expect PASS.**
 
-- [ ] **Step 7: Commit with `git commit -m "feat: open active cli threads safely"`.**
+- [x] **Step 7: Commit with `git commit -m "feat: open active cli threads safely"`.**
 
 ### Task 7: History-Only Monitoring
 
@@ -258,15 +258,15 @@ expect(state.snapshot().threadAccess).toEqual({
 **Interfaces:**
 - Produces: `HistoryThreadRefresher.select(access)`, `browserConnected`, `browserDisconnected`, `focus`, `catalogUpdated`, and `close`.
 
-- [ ] **Step 1: Write failing fake-timer tests** for three-second polling, zero polling without browsers, single-flight reads, unchanged-history suppression, catalog-triggered refresh, focus refresh, selection cancellation, read-write transition cleanup, and exponential backoff capped at thirty seconds.
+- [x] **Step 1: Write failing fake-timer tests** for three-second polling, zero polling without browsers, single-flight reads, unchanged-history suppression, catalog-triggered refresh, focus refresh, selection cancellation, read-write transition cleanup, and exponential backoff capped at thirty seconds.
 
-- [ ] **Step 2: Run the focused test and verify missing-module failure.**
+- [x] **Step 2: Run the focused test and verify missing-module failure.**
 
-- [ ] **Step 3: Implement the refresher with injected clock/read/project callbacks and generation checks so stale reads cannot replace a newer selection.**
+- [x] **Step 3: Implement the refresher with injected clock/read/project callbacks and generation checks so stale reads cannot replace a newer selection.**
 
-- [ ] **Step 4: Wire browser connection count, focus requests, catalog updates, and thread-open transitions through the server.**
+- [x] **Step 4: Wire browser connection count, focus requests, catalog updates, and thread-open transitions through the server.**
 
-- [ ] **Step 5: Run refresher, catalog, server, and gateway tests; expect PASS.**
+- [x] **Step 5: Run refresher, catalog, server, and gateway tests; expect PASS.**
 
 - [ ] **Step 6: Commit with `git commit -m "feat: refresh history only cli threads"`.**
 

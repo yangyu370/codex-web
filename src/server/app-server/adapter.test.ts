@@ -1019,6 +1019,27 @@ describe("CodexAdapter", () => {
     });
   });
 
+  test("does not emit a duplicate thread.loaded event for unchanged history", async () => {
+    const rpc = new ExpectedRpcClient("thread/read", {
+      thread: {
+        id: "t1",
+        preview: "Same history",
+        createdAt: 1,
+        updatedAt: 2,
+        turns: [],
+      },
+    });
+    const state = new WebState("windows");
+    const eventTypes: string[] = [];
+    state.onEvent((event) => eventTypes.push(event.type));
+    const adapter = new CodexAdapter(rpc, state);
+
+    await adapter.readThread("t1");
+    await adapter.readThread("t1");
+
+    expect(eventTypes.filter((type) => type === "thread.loaded")).toHaveLength(1);
+  });
+
   test("preserves bounded native rejection metadata for internal access classification", async () => {
     const native = new JsonRpcResponseError(
       -32600,

@@ -33,6 +33,13 @@ export type NativeTurnInput =
   | { type: "text"; text: string }
   | { type: "localImage"; path: string };
 
+export interface ThreadHistoryProjection {
+  thread: ReturnType<typeof decodeThreadEnvelope>["thread"];
+  items: ReturnType<typeof decodeThreadEnvelope>["items"];
+  activeTurn?: BrowserSnapshot["activeTurn"];
+  settings?: NonNullable<ReturnType<typeof decodeThreadEnvelope>["settings"]>;
+}
+
 // Turns are fetched newest-first in pages; larger pages cut sequential
 // round trips when loading long sessions (the 500-item cap still bounds work).
 const RESUME_PAGE_LIMIT = 50;
@@ -202,7 +209,32 @@ export class CodexAdapter {
     threadId: string,
     access: ThreadAccess = { threadId, mode: "historyOnly", reason: "unsupportedSource" },
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
-    return this.#loadThread("thread/read", { threadId, includeTurns: true }, access);
+    const history = await this.readThreadHistory(threadId);
+    this.projectThreadHistory(history, access, true);
+    return history.thread;
+  }
+
+  async readThreadHistory(threadId: string): Promise<ThreadHistoryProjection> {
+    return this.#decodeThreadHistory(
+      "thread/read",
+      await this.#request("thread/read", { threadId, includeTurns: true }),
+    );
+  }
+
+  projectThreadHistory(
+    history: ThreadHistoryProjection,
+    access: ThreadAccess,
+    suppressUnchanged = false,
+  ): void {
+    this.#state.upsertThread(history.thread);
+    this.#state.loadThread(
+      history.thread.id,
+      history.items,
+      history.activeTurn,
+      access,
+      suppressUnchanged,
+    );
+    if (history.settings) this.#state.setThreadSettings(history.settings);
   }
 
   async startTurn(
@@ -328,19 +360,27 @@ export class CodexAdapter {
     access: ThreadAccess,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
     const response = await this.#request(method, params);
+    const history = this.#decodeThreadHistory(method, response);
+    this.projectThreadHistory(history, access);
+    return history.thread;
+  }
+
+  #decodeThreadHistory(
+    method: "thread/resume" | "thread/read",
+    response: unknown,
+  ): ThreadHistoryProjection {
     const decoded = decodeThreadEnvelope(response);
     const rawResponse = record(response, `${method} response`);
     const rawThread = record(rawResponse.thread, `${method} response.thread`);
     const turns = Array.isArray(rawThread.turns) ? rawThread.turns : [];
-    this.#state.upsertThread(decoded.thread);
-    this.#state.loadThread(
-      decoded.thread.id,
-      decoded.items,
-      activeTurnFrom(turns, decoded.thread.id),
-      access,
-    );
-    if (decoded.settings) this.#state.setThreadSettings(decoded.settings);
-    return decoded.thread;
+    return {
+      thread: decoded.thread,
+      items: decoded.items,
+      ...(turns.length > 0
+        ? { activeTurn: activeTurnFrom(turns, decoded.thread.id) }
+        : {}),
+      ...(decoded.settings ? { settings: decoded.settings } : {}),
+    };
   }
 
   async #request(method: string, params: unknown): Promise<unknown> {

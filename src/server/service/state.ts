@@ -171,9 +171,21 @@ export class WebState {
     items: VisibleItem[],
     activeTurn?: BrowserSnapshot["activeTurn"],
     access?: ThreadAccess,
+    suppressUnchanged = false,
   ): void {
     if (access && access.threadId !== threadId) {
       throw new Error("invalidRequest: thread access does not match loaded task");
+    }
+    const previousItems = this.#visibleItems;
+    this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
+    this.#trimVisibleItems();
+    const unchanged = this.#loadedThreadId === threadId &&
+      sameValue(this.#visibleItems, previousItems) &&
+      sameValue(this.#activeTurn, activeTurn?.threadId === threadId ? activeTurn : undefined) &&
+      sameValue(this.#threadAccess, access);
+    if (suppressUnchanged && unchanged) {
+      this.#visibleItems = previousItems;
+      return;
     }
     this.#threadSettings = undefined;
     this.#review = undefined;
@@ -183,8 +195,6 @@ export class WebState {
     this.#loadedThreadId = threadId;
     this.#threadAccess = access;
     this.#activeTurn = activeTurn?.threadId === threadId ? activeTurn : undefined;
-    this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
-    this.#trimVisibleItems();
     this.#emit("thread.loaded", {
       threadId,
       items: this.#visibleItems,
@@ -657,6 +667,10 @@ export class WebState {
       listener(event);
     }
   }
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function approvalKind(method: string): PendingApproval["kind"] {

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { MAX_BROWSER_MESSAGE_BYTES } from "../shared/protocol";
 
-import { CodexAdapter } from "./app-server/adapter";
+import { CodexAdapter, type ThreadHistoryProjection } from "./app-server/adapter";
 import { AppServerProcessManager, shouldInterruptOnWebShutdown } from "./app-server/process-manager";
 import { parseWindowsSharedPolicy } from "./app-server/windows-managed-backend";
 import { parseAuthConfig } from "./auth/config";
@@ -17,6 +17,7 @@ import { AttachmentStore } from "./service/attachment-store";
 import { TurnCoordinator } from "./service/turn-coordinator";
 import { ThreadCatalogRefresher } from "./service/thread-catalog";
 import { ThreadAccessController } from "./service/thread-access";
+import { HistoryThreadRefresher } from "./service/history-thread-refresher";
 
 const hostname = "127.0.0.1";
 const port = parsePort(process.env.CODEX_WEB_PORT);
@@ -46,10 +47,21 @@ function readyAdapter(): CodexAdapter {
 
 const attachments = new AttachmentStore(platform, platform.dataDirectory());
 const coordinator = new TurnCoordinator(state, attachments, readyAdapter);
+const history = new HistoryThreadRefresher<ThreadHistoryProjection>({
+  read: (threadId) => readyAdapter().readThreadHistory(threadId),
+  project: (threadId, projection) => {
+    const access = state.snapshot().threadAccess;
+    if (access?.threadId !== threadId || access.mode !== "historyOnly") return;
+    readyAdapter().projectThreadHistory(projection, access, true);
+  },
+  signature: (projection) => JSON.stringify(projection),
+  onError: (error) => state.addDiagnostic(`history refresh: ${error.message}`),
+});
 const catalog = new ThreadCatalogRefresher(
   () => readyAdapter().listThreads(),
   {
     onError: (error) => state.addDiagnostic(`thread catalog refresh: ${error.message}`),
+    onUpdated: (value) => history.catalogUpdated(value.data),
   },
 );
 const threadAccess = new ThreadAccessController({
@@ -62,16 +74,37 @@ const actions: BrowserActions = {
   models: () => readyAdapter().models(),
   permissionProfiles: () => readyAdapter().permissionProfiles(),
   listThreads: async (cursor) => {
+    history.focus();
     if (cursor) return readyAdapter().listThreads(cursor);
     return (await catalog.refreshNow()) ?? {
       data: state.snapshot().threads,
       nextCursor: null,
     };
   },
-  startThread: (params) => readyAdapter().startThread(params),
-  openThread: (threadId) => threadAccess.open(threadId),
-  resumeThread: (threadId) => readyAdapter().resumeThread(threadId),
-  readThread: (threadId) => readyAdapter().readThread(threadId),
+  startThread: async (params) => {
+    history.select(undefined);
+    const thread = await readyAdapter().startThread(params);
+    history.select(state.snapshot().threadAccess);
+    return thread;
+  },
+  openThread: async (threadId) => {
+    history.select(undefined);
+    const opened = await threadAccess.open(threadId);
+    history.select(opened.access);
+    return opened;
+  },
+  resumeThread: async (threadId) => {
+    history.select(undefined);
+    const thread = await readyAdapter().resumeThread(threadId);
+    history.select(state.snapshot().threadAccess);
+    return thread;
+  },
+  readThread: async (threadId) => {
+    history.select(undefined);
+    const thread = await readyAdapter().readThread(threadId);
+    history.select(state.snapshot().threadAccess);
+    return thread;
+  },
   startTurn: (threadId, text, attachmentSessionId, taskSettings) =>
     coordinator.start(threadId, text, attachmentSessionId, taskSettings),
   interruptTurn: (threadId, turnId) => readyAdapter().interruptTurn(threadId, turnId),
@@ -86,10 +119,12 @@ const gateway = new BrowserGateway(state, actions, {
   onConnectionCountChanged(count) {
     while (browserConnections < count) {
       catalog.browserConnected();
+      history.browserConnected();
       browserConnections += 1;
     }
     while (browserConnections > count) {
       catalog.browserDisconnected();
+      history.browserDisconnected();
       browserConnections -= 1;
     }
   },
@@ -122,10 +157,10 @@ manager.onState((snapshot) => {
       loadCapability("permission profiles", () => nextAdapter.permissionProfiles()),
       loadCapability("thread catalog", () => nextAdapter.listThreads()),
       ...(loadedThreadId
-        ? [loadCapability(
-            "loaded thread",
-            () => new ThreadAccessController(nextAdapter).open(loadedThreadId),
-          )]
+        ? [loadCapability("loaded thread", async () => {
+            const opened = await new ThreadAccessController(nextAdapter).open(loadedThreadId);
+            history.select(opened.access);
+          })]
         : []),
     ]).then(() => {
       if (generation !== readyGeneration || manager.snapshot().status !== "ready") return;
@@ -142,6 +177,7 @@ manager.onState((snapshot) => {
     return;
   }
   adapter = undefined;
+  history.select(undefined);
   state.interruptActiveWork();
   const diagnosticId = snapshot.error ? crypto.randomUUID() : undefined;
   if (snapshot.error && diagnosticId) {
@@ -208,6 +244,7 @@ async function shutdown(): Promise<void> {
   state.interruptActiveWork();
   await manager.stop();
   catalog.close();
+  history.close();
   coordinator.close();
   await attachments.close();
   await localLog.flush();
