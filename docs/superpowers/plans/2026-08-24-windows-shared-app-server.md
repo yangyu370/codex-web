@@ -113,7 +113,7 @@ expect(() => parseManagedLoopbackEndpoint("ws://localhost:4500"))
 
 - [x] **Step 4: Run the focused transport tests and Unix transport tests; expect PASS.**
 
-- [ ] **Step 5: Commit with `git commit -m "feat: add loopback tcp websocket transport"`.**
+- [x] **Step 5: Commit with `git commit -m "feat: add loopback tcp websocket transport"`.**
 
 ### Task 3: Windows Shared Lifecycle Coordinator
 
@@ -130,7 +130,7 @@ expect(() => parseManagedLoopbackEndpoint("ws://localhost:4500"))
 - Produces: `WindowsSharedMetadata` keyed by canonical `CODEX_HOME` and containing endpoint, host/native PID, executable, CLI/app-server versions, generation, and timestamp.
 - Produces: lifecycle CLI JSON results with exit codes 0 for success and nonzero for incompatible/conflict/failure.
 
-- [ ] **Step 1: Write failing coordinator tests** with injected filesystem/process/readiness operations for first start, concurrent single-flight, matching reuse, stale-lock recovery, malformed metadata, mismatched `CODEX_HOME`, unknown port owner, version mismatch, verified stop, and refusal to kill arbitrary PIDs.
+- [x] **Step 1: Write failing coordinator tests** with injected filesystem/process/readiness operations for first start, concurrent single-flight, matching reuse, stale-lock recovery, malformed metadata, mismatched `CODEX_HOME`, unknown port owner, version mismatch, verified stop, and refusal to kill arbitrary PIDs.
 
 ```ts
 await Promise.all([coordinator.ensure(), coordinator.ensure()]);
@@ -139,15 +139,15 @@ await expect(mismatched.ensure()).rejects.toThrow("managed identity mismatch");
 expect(fakeHost.terminated).toEqual([]);
 ```
 
-- [ ] **Step 2: Run the coordinator test and verify missing-module failure.**
+- [x] **Step 2: Run the coordinator test and verify missing-module failure.**
 
-- [ ] **Step 3: Implement strict JSON metadata parsing, atomic `wx` lock acquisition, bounded readiness polling, stale-lock rules, and identity checks. Namespace files by a SHA-256 digest of canonical `CODEX_HOME`.**
+- [x] **Step 3: Implement strict JSON metadata parsing, atomic `wx` lock acquisition, bounded readiness polling, stale-lock rules, and identity checks. Namespace files by a SHA-256 digest of canonical `CODEX_HOME`.**
 
-- [ ] **Step 4: Implement the detached host subcommand using a hidden detached Windows process, drain child output into a 256 KiB rotating diagnostic file, write host/native identity atomically, and exit with the native child.**
+- [x] **Step 4: Implement the detached host subcommand using a hidden detached Windows process, drain child output into a 256 KiB rotating diagnostic file, write host/native identity atomically, and exit with the native child.**
 
-- [ ] **Step 5: Implement readiness using TCP WebSocket plus `initialize`/`initialized`, closing the probe connection afterward.**
+- [x] **Step 5: Implement readiness using TCP WebSocket plus `initialize`/`initialized`, closing the probe connection afterward.**
 
-- [ ] **Step 6: Run coordinator, transport, platform runtime tests, and typecheck; expect PASS.**
+- [x] **Step 6: Run coordinator, transport, platform runtime tests, and typecheck; expect PASS.**
 
 - [ ] **Step 7: Commit with `git commit -m "feat: coordinate windows shared app server"`.**
 
