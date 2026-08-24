@@ -203,7 +203,7 @@ expect(fakeHost.terminated).toEqual([]);
 
 - [x] **Step 5: Add CI PowerShell parser checks and run tests/typecheck; if `pwsh` is unavailable locally, assert the Bun structural tests and leave the native parser to Windows CI.**
 
-- [ ] **Step 6: Commit with `git commit -m "feat: add windows shared cli launchers"`.**
+- [x] **Step 6: Commit with `git commit -m "feat: add windows shared cli launchers"`.**
 
 ### Task 6: Platform-Neutral Thread Open and Access State
 
@@ -226,7 +226,7 @@ expect(fakeHost.terminated).toEqual([]);
 - Produces: `ThreadAccess { threadId, mode: "readWrite" | "historyOnly", reason? }`.
 - Produces: internal structured `JsonRpcResponseError` inspection without exposing raw native text to browsers.
 
-- [ ] **Step 1: Write failing tests** proving successful resume becomes read-write, only active-writer rejection falls back to `thread/read`, generic rejection stays an error, and every mutation rejects history-only state.
+- [x] **Step 1: Write failing tests** proving successful resume becomes read-write, only active-writer rejection falls back to `thread/read`, generic rejection stays an error, and every mutation rejects history-only state.
 
 ```ts
 await access.open("thread-1");
@@ -235,15 +235,15 @@ expect(state.snapshot().threadAccess).toEqual({
 });
 ```
 
-- [ ] **Step 2: Run focused tests and verify missing access state/method failures.**
+- [x] **Step 2: Run focused tests and verify missing access state/method failures.**
 
-- [ ] **Step 3: Preserve bounded native error code/message/data internally; implement the narrow active-writer classifier for the 0.149.1 response shape.**
+- [x] **Step 3: Preserve bounded native error code/message/data internally; implement the narrow active-writer classifier for the 0.149.1 response shape.**
 
-- [ ] **Step 4: Implement `ThreadAccessController.open`, atomically update loaded history and access state, and centralize mutation checks in the gateway.**
+- [x] **Step 4: Implement `ThreadAccessController.open`, atomically update loaded history and access state, and centralize mutation checks in the gateway.**
 
-- [ ] **Step 5: Increment browser protocol version and remove production client dependence on choosing resume versus read.**
+- [x] **Step 5: Increment browser protocol version and remove production client dependence on choosing resume versus read.**
 
-- [ ] **Step 6: Run adapter/state/gateway/protocol tests and typecheck; expect PASS.**
+- [x] **Step 6: Run adapter/state/gateway/protocol tests and typecheck; expect PASS.**
 
 - [ ] **Step 7: Commit with `git commit -m "feat: open active cli threads safely"`.**
 

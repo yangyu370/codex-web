@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseClientMessage } from "./protocol";
+import { parseClientMessage, WEB_PROTOCOL_VERSION } from "./protocol";
 
 describe("parseClientMessage", () => {
   test("accepts a correlated thread list request", () => {
@@ -13,6 +13,20 @@ describe("parseClientMessage", () => {
       id: "r1",
       method: "thread.list",
       params: {},
+    });
+  });
+
+  test("accepts thread.open in protocol version 4", () => {
+    expect(WEB_PROTOCOL_VERSION).toBe(4);
+    expect(
+      parseClientMessage(
+        '{"kind":"request","id":"open-1","method":"thread.open","params":{"threadId":"thread-1"}}',
+      ),
+    ).toEqual({
+      kind: "request",
+      id: "open-1",
+      method: "thread.open",
+      params: { threadId: "thread-1" },
     });
   });
 

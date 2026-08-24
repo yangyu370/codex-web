@@ -28,6 +28,7 @@ export interface JsonRpcTransport {
 }
 
 const MAX_ERROR_DATA_BYTES = 16_384;
+const MAX_ERROR_MESSAGE_BYTES = 4_096;
 
 export class JsonRpcResponseError extends Error {
   constructor(
@@ -227,8 +228,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function jsonRpcResponseError(value: unknown): JsonRpcResponseError {
   if (!isRecord(value)) return new JsonRpcResponseError(-32_000, "app-server rejected request");
   const code = typeof value.code === "number" ? value.code : -32_000;
-  const message = typeof value.message === "string" ? value.message : "app-server rejected request";
+  const message = boundedErrorMessage(
+    typeof value.message === "string" ? value.message : "app-server rejected request",
+  );
   return new JsonRpcResponseError(code, message, boundedErrorData(value.data));
+}
+
+function boundedErrorMessage(value: string): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).byteLength <= MAX_ERROR_MESSAGE_BYTES) return value;
+  let result = "";
+  for (const character of value) {
+    if (encoder.encode(result + character).byteLength > MAX_ERROR_MESSAGE_BYTES) break;
+    result += character;
+  }
+  return result;
 }
 
 function boundedErrorData(value: unknown): unknown {

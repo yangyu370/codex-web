@@ -19,6 +19,7 @@ export interface BrowserActions {
   permissionProfiles(): Promise<PermissionProfileSummary[]>;
   listThreads(cursor?: string): Promise<{ data: ThreadSummary[]; nextCursor: string | null }>;
   startThread(params: { cwd: string; model?: string }): Promise<unknown>;
+  openThread(threadId: string): Promise<unknown>;
   resumeThread(threadId: string): Promise<unknown>;
   readThread(threadId: string): Promise<unknown>;
   startTurn(
@@ -130,6 +131,8 @@ export class BrowserGateway {
         const model = optionalString(request.params.model);
         return this.#actions.startThread({ cwd, ...(model ? { model } : {}) });
       }
+      case "thread.open":
+        return this.#actions.openThread(requiredBoundedString(request.params, "threadId", 512));
       case "thread.resume":
         return this.#actions.resumeThread(requiredString(request.params, "threadId"));
       case "thread.read":
@@ -195,13 +198,19 @@ export class BrowserGateway {
         }
         return this.#actions.interruptTurn(threadId, turnId);
       }
-      case "approval.resolve":
+      case "approval.resolve": {
+        const approvalId = requiredString(request.params, "approvalId");
+        const approval = this.#state.snapshot().pendingApprovals.find(
+          (entry) => entry.id === approvalId,
+        );
+        if (approval) this.#requireWritableThread(approval.threadId);
         this.#actions.resolveApproval(
-          requiredString(request.params, "approvalId"),
+          approvalId,
           requiredString(request.params, "decision"),
           deviceId,
         );
         return {};
+      }
     }
   }
 

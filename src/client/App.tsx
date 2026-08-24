@@ -293,7 +293,7 @@ export function App({
     if (client) {
       try {
         setActionError(undefined);
-        await client.request("thread.resume", { threadId });
+        await client.request("thread.open", { threadId });
       } catch (error) {
         setActionError(errorMessage(error));
       }

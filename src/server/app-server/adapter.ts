@@ -5,7 +5,7 @@ import {
 } from "./json-rpc";
 import type { WebState } from "../service/state";
 import type { ValidatedPath } from "../platform";
-import type { BrowserSnapshot } from "../../shared/protocol";
+import type { BrowserSnapshot, ThreadAccess } from "../../shared/protocol";
 import {
   decodeModelList,
   decodePermissionProfileList,
@@ -36,6 +36,28 @@ export type NativeTurnInput =
 // Turns are fetched newest-first in pages; larger pages cut sequential
 // round trips when loading long sessions (the 500-item cap still bounds work).
 const RESUME_PAGE_LIMIT = 50;
+
+export interface NativeRejectionMetadata {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+export class CodexRejectedError extends Error {
+  readonly native?: NativeRejectionMetadata;
+
+  constructor(method: string, native?: JsonRpcResponseError) {
+    super(`codexRejected: ${method}`);
+    this.name = "CodexRejectedError";
+    this.native = native
+      ? {
+          code: native.code,
+          message: native.message,
+          ...(native.data === undefined ? {} : { data: native.data }),
+        }
+      : undefined;
+  }
+}
 
 export class CodexAdapter {
   readonly #rpc: RpcClient;
@@ -118,13 +140,17 @@ export class CodexAdapter {
     );
     const thread = { ...decoded.thread, cwd: cwd.displayPath };
     this.#state.upsertThread(thread);
-    this.#state.loadThread(thread.id, decoded.items);
+    this.#state.loadThread(thread.id, decoded.items, undefined, {
+      threadId: thread.id,
+      mode: "readWrite",
+    });
     if (decoded.settings) this.#state.setThreadSettings(decoded.settings);
     return thread;
   }
 
   async resumeThread(
     threadId: string,
+    access: ThreadAccess = { threadId, mode: "readWrite" },
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
     const startedAt = Date.now();
     try {
@@ -162,20 +188,21 @@ export class CodexAdapter {
         `resume ${threadId}: pages=${pages + 1} items=${items.length} totalMs=${Date.now() - startedAt}`,
       );
       this.#state.upsertThread(decoded.thread);
-      this.#state.loadThread(decoded.thread.id, items, activeTurn);
+      this.#state.loadThread(decoded.thread.id, items, activeTurn, access);
       const runtime = decodeThreadEnvelope(response).settings;
       if (runtime) this.#state.setThreadSettings(runtime);
       return decoded.thread;
     } catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith("compatibilityError:")) throw error;
-      return this.#loadThread("thread/resume", { threadId });
+      return this.#loadThread("thread/resume", { threadId }, access);
     }
   }
 
   async readThread(
     threadId: string,
+    access: ThreadAccess = { threadId, mode: "historyOnly", reason: "unsupportedSource" },
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
-    return this.#loadThread("thread/read", { threadId, includeTurns: true });
+    return this.#loadThread("thread/read", { threadId, includeTurns: true }, access);
   }
 
   async startTurn(
@@ -298,6 +325,7 @@ export class CodexAdapter {
   async #loadThread(
     method: "thread/resume" | "thread/read",
     params: Record<string, unknown>,
+    access: ThreadAccess,
   ): Promise<ReturnType<typeof decodeThreadEnvelope>["thread"]> {
     const response = await this.#request(method, params);
     const decoded = decodeThreadEnvelope(response);
@@ -305,7 +333,12 @@ export class CodexAdapter {
     const rawThread = record(rawResponse.thread, `${method} response.thread`);
     const turns = Array.isArray(rawThread.turns) ? rawThread.turns : [];
     this.#state.upsertThread(decoded.thread);
-    this.#state.loadThread(decoded.thread.id, decoded.items, activeTurnFrom(turns, decoded.thread.id));
+    this.#state.loadThread(
+      decoded.thread.id,
+      decoded.items,
+      activeTurnFrom(turns, decoded.thread.id),
+      access,
+    );
     if (decoded.settings) this.#state.setThreadSettings(decoded.settings);
     return decoded.thread;
   }
@@ -326,7 +359,7 @@ export class CodexAdapter {
         throw new Error(`compatibilityError: ${method}`);
       }
       if (error instanceof JsonRpcResponseError && error.code === -32001) {
-        throw new Error(`codexRejected: retryable overload in ${method}`);
+        throw new CodexRejectedError(`retryable overload in ${method}`, error);
       }
       if (
         lower.includes("transport is closed") ||
@@ -336,7 +369,10 @@ export class CodexAdapter {
       ) {
         throw new Error(`interrupted: ${method}`);
       }
-      throw new Error(`codexRejected: ${method}`);
+      throw new CodexRejectedError(
+        method,
+        error instanceof JsonRpcResponseError ? error : undefined,
+      );
     }
   }
 }

@@ -6,6 +6,7 @@ import type {
   PermissionProfileSummary,
   ReviewState,
   ThreadSummary,
+  ThreadAccess,
   ThreadSettingsSummary,
   VisibleItem,
 } from "../../shared/protocol";
@@ -62,6 +63,7 @@ export class WebState {
   #permissionProfiles: PermissionProfileSummary[] = [];
   #threads: ThreadSummary[] = [];
   #loadedThreadId?: string;
+  #threadAccess?: ThreadAccess;
   #activeTurn?: BrowserSnapshot["activeTurn"];
   #visibleItems: VisibleItem[] = [];
   #approvals: PendingApproval[] = [];
@@ -89,6 +91,7 @@ export class WebState {
       permissionProfiles: this.#permissionProfiles,
       threads: this.#threads,
       ...(this.#loadedThreadId ? { loadedThreadId: this.#loadedThreadId } : {}),
+      ...(this.#threadAccess ? { threadAccess: this.#threadAccess } : {}),
       ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
       visibleItems: this.#visibleItems,
       pendingApprovals: this.#approvals.filter((approval) => approval.status === "pending"),
@@ -167,13 +170,18 @@ export class WebState {
     threadId: string,
     items: VisibleItem[],
     activeTurn?: BrowserSnapshot["activeTurn"],
+    access?: ThreadAccess,
   ): void {
+    if (access && access.threadId !== threadId) {
+      throw new Error("invalidRequest: thread access does not match loaded task");
+    }
     this.#threadSettings = undefined;
     this.#review = undefined;
     this.#turnDiff = undefined;
     this.#tokenUsage = undefined;
     this.interruptApprovals();
     this.#loadedThreadId = threadId;
+    this.#threadAccess = access;
     this.#activeTurn = activeTurn?.threadId === threadId ? activeTurn : undefined;
     this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
     this.#trimVisibleItems();
@@ -181,7 +189,16 @@ export class WebState {
       threadId,
       items: this.#visibleItems,
       ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
+      ...(this.#threadAccess ? { threadAccess: this.#threadAccess } : {}),
     });
+  }
+
+  setThreadAccess(access: ThreadAccess): void {
+    if (access.threadId !== this.#loadedThreadId) {
+      throw new Error("invalidRequest: thread access does not match loaded task");
+    }
+    this.#threadAccess = access;
+    this.#emit("thread.access.updated", { threadAccess: access });
   }
 
   applyNotification(notification: JsonRpcNotification): void {
@@ -399,6 +416,8 @@ export class WebState {
 
   canAcceptDirectInput(threadId: string): boolean {
     return this.#loadedThreadId === threadId &&
+      this.#threadAccess?.threadId === threadId &&
+      this.#threadAccess.mode === "readWrite" &&
       this.#threads.find((thread) => thread.id === threadId)?.canAcceptDirectInput === true;
   }
 

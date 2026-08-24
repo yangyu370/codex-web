@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const MAX_BROWSER_MESSAGE_BYTES = 65_536;
 export const MAX_SERVER_MESSAGE_BYTES = 8_388_608;
-export const WEB_PROTOCOL_VERSION = 3;
+export const WEB_PROTOCOL_VERSION = 4;
 
 export const browserMethods = [
   "directory.list",
@@ -10,6 +10,7 @@ export const browserMethods = [
   "permissionProfile.list",
   "thread.list",
   "thread.start",
+  "thread.open",
   "thread.resume",
   "thread.read",
   "thread.settings.update",
@@ -130,6 +131,12 @@ export interface ThreadSummary {
   canAcceptDirectInput?: boolean;
 }
 
+export interface ThreadAccess {
+  threadId: string;
+  mode: "readWrite" | "historyOnly";
+  reason?: "activeWriter" | "unsupportedSource" | "sharedModeUnavailable";
+}
+
 export interface ThreadSettingsSummary {
   threadId: string;
   model: string;
@@ -231,6 +238,7 @@ export interface BrowserSnapshot {
   permissionProfiles?: PermissionProfileSummary[];
   threads: ThreadSummary[];
   loadedThreadId?: string;
+  threadAccess?: ThreadAccess;
   activeTurn?: {
     id: string;
     threadId: string;

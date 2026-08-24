@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import type { JsonRpcNotification, JsonRpcServerRequest } from "./json-rpc";
-import { CodexAdapter, type RpcClient } from "./adapter";
+import { JsonRpcResponseError, type JsonRpcNotification, type JsonRpcServerRequest } from "./json-rpc";
+import { CodexAdapter, CodexRejectedError, type RpcClient } from "./adapter";
 import {
   decodeHistoryItem,
   decodeModelList,
@@ -931,6 +931,7 @@ describe("CodexAdapter", () => {
     ).resolves.toMatchObject({ id: "t2", cwd: "/alias/work" });
     expect(state.snapshot().threads[0]?.cwd).toBe("/alias/work");
     expect(state.snapshot().loadedThreadId).toBe("t2");
+    expect(state.snapshot().threadAccess).toEqual({ threadId: "t2", mode: "readWrite" });
   });
 
   test("loads reconstructed turns when resuming a thread", async () => {
@@ -987,6 +988,7 @@ describe("CodexAdapter", () => {
       threadId: "t1",
       status: "inProgress",
     });
+    expect(state.snapshot().threadAccess).toEqual({ threadId: "t1", mode: "readWrite" });
   });
 
   test("reads durable thread history with includeTurns enabled", async () => {
@@ -1010,6 +1012,36 @@ describe("CodexAdapter", () => {
 
     await expect(adapter.readThread("t1")).resolves.toMatchObject({ id: "t1" });
     expect(state.snapshot().loadedThreadId).toBe("t1");
+    expect(state.snapshot().threadAccess).toEqual({
+      threadId: "t1",
+      mode: "historyOnly",
+      reason: "unsupportedSource",
+    });
+  });
+
+  test("preserves bounded native rejection metadata for internal access classification", async () => {
+    const native = new JsonRpcResponseError(
+      -32600,
+      "Thread already has an active writer",
+      { threadId: "t1" },
+    );
+    const adapter = new CodexAdapter(
+      new ExpectedRpcClient("thread/resume", native),
+      new WebState("windows"),
+    );
+
+    try {
+      await adapter.resumeThread("t1");
+      throw new Error("expected resume to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexRejectedError);
+      expect((error as CodexRejectedError).native).toEqual({
+        code: -32600,
+        message: "Thread already has an active writer",
+        data: { threadId: "t1" },
+      });
+      expect((error as Error).message).toBe("codexRejected: thread/resume");
+    }
   });
 
   test("starts and interrupts a turn with exact app-server params", async () => {

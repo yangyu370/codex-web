@@ -16,6 +16,7 @@ function actions(overrides: Partial<BrowserActions> = {}): BrowserActions {
     permissionProfiles: async () => [],
     listThreads: async () => ({ data: [], nextCursor: null }),
     startThread: async () => ({ id: "t1" }),
+    openThread: async () => ({ id: "t1" }),
     resumeThread: async () => ({ id: "t1" }),
     readThread: async () => ({ id: "t1" }),
     startTurn: async () => ({ id: "turn1", threadId: "t1", status: "inProgress" }),
@@ -81,6 +82,20 @@ describe("BrowserGateway", () => {
         },
       },
     ]);
+  });
+
+  test("dispatches thread.open to the server-owned access policy", async () => {
+    const state = new WebState("windows");
+    const calls: string[] = [];
+    const gateway = new BrowserGateway(state, actions({
+      openThread: async (threadId) => { calls.push(threadId); return { id: threadId }; },
+    }));
+    const sent: ServerMessage[] = [];
+
+    await gateway.handleMessage(request("thread.open", { threadId: "thread-1" }), (message) => sent.push(message));
+
+    expect(calls).toEqual(["thread-1"]);
+    expect(sent).toEqual([{ kind: "response", id: "r1", result: { id: "thread-1" } }]);
   });
 
   test("lists directories from the Codex host with an optional server path", async () => {
@@ -231,20 +246,35 @@ describe("BrowserGateway", () => {
       canAcceptDirectInput: false,
     }]);
     state.loadThread("history", []);
+    state.setThreadAccess({
+      threadId: "history",
+      mode: "historyOnly",
+      reason: "activeWriter",
+    });
+    const approval = state.addApproval({
+      id: 7,
+      method: "item/commandExecution/requestApproval",
+      params: { threadId: "history", turnId: "turn-1", itemId: "command-1" },
+    });
     const calls: unknown[] = [];
     const gateway = new BrowserGateway(state, actions({
       startTurn: async (...args) => { calls.push(["turn", ...args]); return {}; },
       updateThreadSettings: async (...args) => { calls.push(["settings", ...args]); return {}; },
       startReview: async (...args) => { calls.push(["review", ...args]); return {}; },
+      resolveApproval: (...args) => { calls.push(["approval", ...args]); },
     }));
     const sent: ServerMessage[] = [];
 
     await gateway.handleMessage(request("turn.start", { threadId: "history", text: "Continue" }), (message) => sent.push(message));
     await gateway.handleMessage(request("thread.settings.update", { threadId: "history", effort: "high" }), (message) => sent.push(message));
     await gateway.handleMessage(request("review.start", { threadId: "other" }), (message) => sent.push(message));
+    await gateway.handleMessage(request("approval.resolve", {
+      approvalId: approval.id,
+      decision: "accept",
+    }), (message) => sent.push(message));
 
     expect(calls).toEqual([]);
-    expect(sent).toHaveLength(3);
+    expect(sent).toHaveLength(4);
     expect(sent.every((message) => message.kind === "response" && message.error?.code === "invalidRequest")).toBe(true);
   });
 
@@ -352,6 +382,7 @@ describe("BrowserGateway", () => {
 
   test("returns alreadyResolved to the second approval decision", async () => {
     const state = new WebState("windows");
+    makeWritable(state, "t1");
     const approval = state.addApproval({
       id: 9,
       method: "item/fileChange/requestApproval",
@@ -393,4 +424,5 @@ function makeWritable(state: WebState, threadId: string): void {
     canAcceptDirectInput: true,
   }]);
   state.loadThread(threadId, []);
+  state.setThreadAccess({ threadId, mode: "readWrite" });
 }

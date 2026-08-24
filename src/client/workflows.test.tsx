@@ -263,7 +263,7 @@ describe("live client workflows", () => {
     await user.click(screen.getByRole("button", { name: /Existing task/ }));
 
     expect(JSON.parse(socket.sent[0] ?? "null")).toMatchObject({
-      method: "thread.resume",
+      method: "thread.open",
       params: { threadId: "existing" },
     });
   });

@@ -16,6 +16,7 @@ import { LocalEventLog, secretEnvironmentValues } from "./service/local-log";
 import { AttachmentStore } from "./service/attachment-store";
 import { TurnCoordinator } from "./service/turn-coordinator";
 import { ThreadCatalogRefresher } from "./service/thread-catalog";
+import { ThreadAccessController } from "./service/thread-access";
 
 const hostname = "127.0.0.1";
 const port = parsePort(process.env.CODEX_WEB_PORT);
@@ -51,6 +52,10 @@ const catalog = new ThreadCatalogRefresher(
     onError: (error) => state.addDiagnostic(`thread catalog refresh: ${error.message}`),
   },
 );
+const threadAccess = new ThreadAccessController({
+  resumeThread: (threadId, access) => readyAdapter().resumeThread(threadId, access),
+  readThread: (threadId, access) => readyAdapter().readThread(threadId, access),
+});
 
 const actions: BrowserActions = {
   listDirectory: (directory) => directories.list(directory),
@@ -64,6 +69,7 @@ const actions: BrowserActions = {
     };
   },
   startThread: (params) => readyAdapter().startThread(params),
+  openThread: (threadId) => threadAccess.open(threadId),
   resumeThread: (threadId) => readyAdapter().resumeThread(threadId),
   readThread: (threadId) => readyAdapter().readThread(threadId),
   startTurn: (threadId, text, attachmentSessionId, taskSettings) =>
@@ -116,7 +122,10 @@ manager.onState((snapshot) => {
       loadCapability("permission profiles", () => nextAdapter.permissionProfiles()),
       loadCapability("thread catalog", () => nextAdapter.listThreads()),
       ...(loadedThreadId
-        ? [loadCapability("loaded thread", () => nextAdapter.resumeThread(loadedThreadId))]
+        ? [loadCapability(
+            "loaded thread",
+            () => new ThreadAccessController(nextAdapter).open(loadedThreadId),
+          )]
         : []),
     ]).then(() => {
       if (generation !== readyGeneration || manager.snapshot().status !== "ready") return;
