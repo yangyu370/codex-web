@@ -6,6 +6,12 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
     throw "Bun 1.3+ is required and was not found on PATH."
 }
+if (
+    $env:CODEX_WEB_WINDOWS_SHARED -and
+    $env:CODEX_WEB_WINDOWS_SHARED -notin @("auto", "required", "off")
+) {
+    throw "CODEX_WEB_WINDOWS_SHARED must be auto, required, or off."
+}
 if ($env:CODEX_WEB_CODEX_EXECUTABLE) {
     if ($env:CODEX_WEB_CODEX_EXECUTABLE -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)') {
         throw "CODEX_WEB_CODEX_EXECUTABLE must be an absolute path."

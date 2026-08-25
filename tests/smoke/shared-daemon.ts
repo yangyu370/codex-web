@@ -75,7 +75,7 @@ try {
     env: nativeEnvironment,
   });
   observerPeer = await observer.start();
-  if (manager.snapshot().mode !== "daemon" || observer.snapshot().mode !== "daemon") {
+  if (manager.snapshot().mode !== "shared" || observer.snapshot().mode !== "shared") {
     throw new Error(
       `macOS smoke did not establish two shared daemon clients: ` +
       `${JSON.stringify({ primary: manager.snapshot(), observer: observer.snapshot() })}`,

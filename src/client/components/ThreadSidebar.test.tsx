@@ -106,6 +106,7 @@ describe("ThreadSidebar directory grouping", () => {
         onSelect={() => undefined}
         query=""
         service={{ ...service, liveHandoff: "available" }}
+        threadAccess={{ threadId: "cli-live", mode: "readWrite" }}
         threads={[
           thread({
             id: "cli-live",
@@ -125,6 +126,36 @@ describe("ThreadSidebar directory grouping", () => {
     expect(running.querySelectorAll(".thread-row")).toHaveLength(1);
     expect(groups()).toHaveLength(1);
     expect(groups()[0]?.querySelector(".thread-directory__name")?.textContent).toBe("first");
+    expect(screen.getByText("LIVE · CLI")).not.toBeNull();
+    expect(screen.getByText("Shared Codex")).not.toBeNull();
+  });
+
+  test("labels the selected private CLI thread read-only without treating it as running", () => {
+    render(
+      <ThreadSidebar
+        connection="connected"
+        onNewTask={() => undefined}
+        onQueryChange={() => undefined}
+        onSelect={() => undefined}
+        query=""
+        selectedId="cli-local"
+        service={{ ...service, platform: "windows", liveHandoff: "available" }}
+        threadAccess={{ threadId: "cli-local", mode: "historyOnly", reason: "activeWriter" }}
+        threads={[thread({
+          id: "cli-local",
+          title: "Local CLI task",
+          updatedAt: 900,
+          cwd: "C:\\work",
+          source: "cli",
+          canAcceptDirectInput: true,
+          status: "idle",
+        })]}
+      />,
+    );
+
+    expect(screen.queryByRole("region", { name: "Running" })).toBeNull();
+    expect(screen.getByText("READ ONLY · LOCAL CLI")).not.toBeNull();
+    expect(screen.getByText("Shared Codex")).not.toBeNull();
   });
 
   test("keeps the grouping while searching and hides empty directories", async () => {

@@ -216,6 +216,11 @@ export class CodexWebClient {
         ? (payload.items as BrowserSnapshot["visibleItems"])
         : [];
       next = { ...next, ...(threadId ? { loadedThreadId: threadId } : {}), visibleItems: items };
+      if (isRecord(payload.threadAccess)) {
+        next.threadAccess = payload.threadAccess as unknown as NonNullable<BrowserSnapshot["threadAccess"]>;
+      } else {
+        delete next.threadAccess;
+      }
       if (isRecord(payload.activeTurn)) {
         next.activeTurn = payload.activeTurn as unknown as NonNullable<BrowserSnapshot["activeTurn"]>;
       } else {
@@ -224,6 +229,11 @@ export class CodexWebClient {
       delete next.threadSettings;
       delete next.turnDiff;
       delete next.review;
+    } else if (event.type === "thread.access.updated" && isRecord(payload.threadAccess)) {
+      next = {
+        ...next,
+        threadAccess: payload.threadAccess as unknown as NonNullable<BrowserSnapshot["threadAccess"]>,
+      };
     } else if (event.type === "service.updated" && isRecord(event.payload)) {
       next = { ...next, service: event.payload as unknown as BrowserSnapshot["service"] };
     } else if (event.type === "approval.pending" && isRecord(payload.approval)) {

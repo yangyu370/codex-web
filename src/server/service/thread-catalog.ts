@@ -1,4 +1,4 @@
-export interface ThreadCatalogRefresherOptions {
+export interface ThreadCatalogRefresherOptions<T = void> {
   intervalMs?: number;
   setInterval?: (
     callback: () => void | Promise<void>,
@@ -6,18 +6,19 @@ export interface ThreadCatalogRefresherOptions {
   ) => unknown;
   clearInterval?: (timer: unknown) => void;
   onError?: (error: Error) => void;
+  onUpdated?: (value: T) => void;
 }
 
 export class ThreadCatalogRefresher<T = void> {
   readonly #refresh: () => Promise<T>;
-  readonly #options: Required<Omit<ThreadCatalogRefresherOptions, "onError">>
-    & Pick<ThreadCatalogRefresherOptions, "onError">;
+  readonly #options: Required<Omit<ThreadCatalogRefresherOptions<T>, "onError" | "onUpdated">>
+    & Pick<ThreadCatalogRefresherOptions<T>, "onError" | "onUpdated">;
   #browserCount = 0;
   #timer?: unknown;
   #inFlight?: Promise<T | undefined>;
   #closed = false;
 
-  constructor(refresh: () => Promise<T>, options: ThreadCatalogRefresherOptions = {}) {
+  constructor(refresh: () => Promise<T>, options: ThreadCatalogRefresherOptions<T> = {}) {
     this.#refresh = refresh;
     this.#options = {
       intervalMs: options.intervalMs ?? 5_000,
@@ -27,6 +28,7 @@ export class ThreadCatalogRefresher<T = void> {
         timer as ReturnType<typeof setInterval>,
       )),
       onError: options.onError,
+      onUpdated: options.onUpdated,
     };
   }
 
@@ -58,7 +60,10 @@ export class ThreadCatalogRefresher<T = void> {
       this.#options.onError?.(normalized);
       return Promise.resolve(undefined);
     }
-    const task = refresh.catch((error: unknown) => {
+    const task = refresh.then((value) => {
+      this.#options.onUpdated?.(value);
+      return value;
+    }).catch((error: unknown) => {
       this.#options.onError?.(
         error instanceof Error ? error : new Error(String(error)),
       );

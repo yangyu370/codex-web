@@ -31,6 +31,7 @@ interface ComposerProps {
   recentDirectories?: string[];
   running: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   attachments?: DraftAttachment[];
   attachmentBlocked?: boolean;
   onValueChange: (value: string) => void;
@@ -58,6 +59,7 @@ export function Composer({
   recentDirectories = [],
   running,
   disabled,
+  disabledReason,
   attachments = [],
   attachmentBlocked = false,
   onValueChange,
@@ -76,7 +78,7 @@ export function Composer({
   const canSend = !disabled && !attachmentBlocked &&
     (value.trim().length > 0 || hasReadyAttachment) && cwd.trim().length > 0 && Boolean(model);
   return (
-    <div className="composer-wrap">
+    <div className="composer-wrap" title={disabled ? disabledReason : undefined}>
       <div className="composer-context" aria-label="Task context" role="group">
         <div className="composer-control composer-control--cwd">
           <FolderGit2 size={14} />
@@ -116,6 +118,7 @@ export function Composer({
         <textarea
           aria-label="Message Codex"
           disabled={disabled}
+          title={disabled ? disabledReason : undefined}
           onChange={(event) => onValueChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && canSend && !running) {
@@ -153,6 +156,7 @@ export function Composer({
           </button>
           <ComposerControls
             disabled={disabled}
+            disabledReason={disabledReason}
             effort={effort}
             efforts={efforts}
             model={model}
@@ -167,7 +171,7 @@ export function Composer({
           />
           <span className="composer-toolbar-spacer" />
           {running ? (
-            <button aria-label="Stop" className="send-button send-button--stop" onClick={onInterrupt} type="button">
+            <button aria-label="Stop" className="send-button send-button--stop" disabled={disabled} onClick={onInterrupt} title={disabled ? disabledReason : "Stop the active turn"} type="button">
               <Square size={11} fill="currentColor" />
             </button>
           ) : (

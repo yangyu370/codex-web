@@ -23,14 +23,20 @@ jobs:
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path scripts/start-windows.ps1),
-            [ref]$tokens,
-            [ref]$errors
-          ) | Out-Null
-          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+          @(
+            'scripts/start-windows.ps1',
+            'scripts/windows-shared-app-server.ps1',
+            'scripts/codex-web-cli.ps1'
+          ) | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $_),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) { throw "$($_):`n$($errors | Out-String)" }
+          }
       - run: bun run typecheck
       - run: bun test
       - run: bun run build

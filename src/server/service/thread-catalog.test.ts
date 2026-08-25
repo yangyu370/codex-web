@@ -64,6 +64,16 @@ describe("ThreadCatalogRefresher", () => {
     expect(errors).toEqual(["temporary catalog failure"]);
   });
 
+  test("publishes successful catalog values to monitoring consumers", async () => {
+    const updates: string[] = [];
+    const refresher = new ThreadCatalogRefresher(async () => "catalog-1", {
+      onUpdated: (value) => updates.push(value),
+    });
+
+    await expect(refresher.refreshNow()).resolves.toBe("catalog-1");
+    expect(updates).toEqual(["catalog-1"]);
+  });
+
   test("close cancels scheduling and prevents later refreshes", async () => {
     const clock = fakeClock();
     let refreshes = 0;

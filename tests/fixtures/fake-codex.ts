@@ -1,14 +1,10 @@
 export {};
 
-const args = process.argv.slice(2);
-if (args.includes("--version")) {
-  console.log("codex-cli fake-1.0.0");
-  process.exit(0);
-}
-if (args[0] !== "app-server" || args[1] !== "--stdio") {
-  console.error("expected app-server --stdio");
-  process.exit(2);
-}
+import { access } from "node:fs/promises";
+
+type Send = (value: unknown) => void;
+
+const clients = new Set<Send>();
 
 let buffer = "";
 let nextThreadId = 1;
@@ -20,25 +16,27 @@ const pendingApprovals = new Map<string | number, {
   threadId: string;
   turnId: string;
 }>();
-const decoder = new TextDecoder();
-for await (const chunk of Bun.stdin.stream()) {
-  buffer += decoder.decode(chunk, { stream: true });
-  while (true) {
-    const newline = buffer.indexOf("\n");
-    if (newline < 0) break;
-    const line = buffer.slice(0, newline).trim();
-    buffer = buffer.slice(newline + 1);
-    if (line) await handle(JSON.parse(line) as Record<string, unknown>);
-  }
+const privateReadCounts = new Map<string, number>();
+
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("codex-cli fake-1.0.0");
+} else if (args[0] === "app-server" && args[1] === "--stdio") {
+  await runStdio();
+} else if (args[0] === "app-server" && args[1] === "--listen" && args[2]) {
+  await runWebSocket(args[2]);
+} else {
+  console.error("expected app-server --stdio or app-server --listen <loopback-url>");
+  process.exitCode = 2;
 }
 
-async function handle(message: Record<string, unknown>): Promise<void> {
+async function handle(message: Record<string, unknown>, send: Send): Promise<void> {
   const id = message.id as string | number | undefined;
   const method = message.method;
   if (method === "initialized") return;
-  if (method === "initialize") return respond(id, { userAgent: "fake-codex" });
+  if (method === "initialize") return respond(send, id, { userAgent: "fake-codex" });
   if (method === "model/list") {
-    return respond(id, {
+    return respond(send, id, {
       data: [{
         id: "gpt-fake",
         displayName: "GPT Fake",
@@ -64,7 +62,7 @@ async function handle(message: Record<string, unknown>): Promise<void> {
           description: `Custom permission profile ${index + 1}`,
           allowed: true,
         });
-    return respond(id, { data: [
+    return respond(send, id, { data: [
       { id: ":read-only", description: "Read without editing", allowed: true },
       { id: ":workspace", description: "Edit this workspace", allowed: true },
       { id: ":managed", description: "Blocked by managed policy", allowed: false },
@@ -72,8 +70,11 @@ async function handle(message: Record<string, unknown>): Promise<void> {
     ] });
   }
   if (method === "thread/list") {
-    return respond(id, {
-      data: Array.from({ length: 100 }, (_, index) => ({
+    return respond(send, id, {
+      data: [
+        fakeThread("shared-cli", "Shared CLI task", "Live from CLI", "cli", true),
+        fakeThread("private-cli", "Private CLI task", "Monitor local CLI", "cli", true),
+        ...Array.from({ length: 98 }, (_, index) => ({
         id: `history-${index}`,
         name: `Historical task ${index + 1}`,
         preview: `Previous task ${index + 1}`,
@@ -81,9 +82,37 @@ async function handle(message: Record<string, unknown>): Promise<void> {
         updatedAt: index + 1,
         cwd: "/work/history",
         status: { type: "idle" },
-      })),
+        })),
+      ],
       nextCursor: null,
     });
+  }
+  if (method === "thread/resume") {
+    const threadId = String((message.params as Record<string, unknown>).threadId);
+    if (threadId === "private-cli" && (privateReadCounts.get(threadId) ?? 0) < 2) {
+      send({ id, error: { code: -32600, message: `thread ${threadId} already has an active writer` } });
+      return;
+    }
+    const privateRevision = privateReadCounts.get(threadId) ?? 0;
+    return respond(send, id, threadEnvelope(
+      fakeThread(
+        threadId,
+        threadId === "private-cli" ? "Private CLI task" : "Shared CLI task",
+        threadId === "private-cli" ? "Local writer released" : "Live from CLI",
+        "cli",
+        true,
+      ),
+      threadId === "private-cli" ? `Private CLI update ${privateRevision}` : "CLI and Web are connected",
+    ));
+  }
+  if (method === "thread/read") {
+    const threadId = String((message.params as Record<string, unknown>).threadId);
+    const revision = (privateReadCounts.get(threadId) ?? 0) + 1;
+    privateReadCounts.set(threadId, revision);
+    return respond(send, id, threadEnvelope(
+      fakeThread(threadId, "Private CLI task", `Private CLI update ${revision}`, "cli", true),
+      `Private CLI update ${revision}`,
+    ));
   }
   if (method === "thread/start") {
     const params = message.params as Record<string, unknown>;
@@ -94,17 +123,17 @@ async function handle(message: Record<string, unknown>): Promise<void> {
       effort: "medium",
       permissionProfile: ":read-only",
     });
-    return respond(id, {
+    const started = fakeThread(
+      threadId,
+      "Create a file",
+      "Create a file",
+      "appServer",
+      true,
+      String(params.cwd ?? ""),
+    );
+    const result = {
       thread: {
-        id: threadId,
-        name: "Create a file",
-        preview: "Create a file",
-        createdAt: 1,
-        updatedAt: 1,
-        cwd: params.cwd,
-        status: { type: "idle" },
-        source: "appServer",
-        canAcceptDirectInput: true,
+        ...started,
         turns: [],
       },
       model: String(params.model ?? "gpt-fake"),
@@ -112,7 +141,10 @@ async function handle(message: Record<string, unknown>): Promise<void> {
       approvalPolicy: "on-request",
       sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
       activePermissionProfile: { id: ":read-only", extends: null },
-    });
+    };
+    respond(send, id, result);
+    if (clients.size > 1) notify("thread/started", { thread: started });
+    return;
   }
   if (method === "thread/settings/update") {
     const params = message.params as Record<string, unknown>;
@@ -128,7 +160,7 @@ async function handle(message: Record<string, unknown>): Promise<void> {
       ...(typeof params.permissions === "string" ? { permissionProfile: params.permissions } : {}),
     };
     taskSettings.set(threadId, next);
-    respond(id, {});
+    respond(send, id, {});
     notify("thread/settings/updated", {
       threadId,
       threadSettings: {
@@ -145,7 +177,7 @@ async function handle(message: Record<string, unknown>): Promise<void> {
     const params = message.params as Record<string, unknown>;
     const threadId = String(params.threadId);
     const turnId = `review-e2e-${nextTurnId++}`;
-    respond(id, {
+    respond(send, id, {
       reviewThreadId: threadId,
       turn: { id: turnId, status: "inProgress", items: [] },
     });
@@ -161,7 +193,7 @@ async function handle(message: Record<string, unknown>): Promise<void> {
     const params = message.params as Record<string, unknown>;
     const attachmentError = await validateAttachmentInputs(params.input);
     if (attachmentError) {
-      write({ id, error: { code: -32602, message: attachmentError } });
+      send({ id, error: { code: -32602, message: attachmentError } });
       return;
     }
     const threadId = String(params.threadId);
@@ -171,7 +203,7 @@ async function handle(message: Record<string, unknown>): Promise<void> {
     nextTurnId += 1;
     nextApprovalId += 1;
     pendingApprovals.set(approvalId, { itemId, threadId, turnId });
-    respond(id, { turn: { id: turnId, status: "inProgress", items: [] } });
+    respond(send, id, { turn: { id: turnId, status: "inProgress", items: [] } });
     notify("item/started", {
       threadId,
       turnId,
@@ -187,7 +219,7 @@ async function handle(message: Record<string, unknown>): Promise<void> {
         changes: [{ path: "hello.txt", diff: "+hello from Codex Web" }],
       },
     });
-    write({
+    send({
       id: approvalId,
       method: "item/fileChange/requestApproval",
       params: {
@@ -197,6 +229,15 @@ async function handle(message: Record<string, unknown>): Promise<void> {
         reason: "Create hello.txt",
         availableDecisions: ["accept", "decline"],
       },
+    });
+    return;
+  }
+  if (method === "turn/interrupt") {
+    const params = message.params as Record<string, unknown>;
+    respond(send, id, {});
+    notify("turn/completed", {
+      threadId: String(params.threadId),
+      turn: { id: String(params.turnId), status: "interrupted" },
     });
     return;
   }
@@ -247,7 +288,9 @@ async function validateAttachmentInputs(value: unknown): Promise<string | undefi
   });
   if (paths.length === 0) return "attachment manifest contains no readable paths";
   for (const filePath of paths) {
-    if (!(await Bun.file(filePath).exists())) return "attachment manifest path is unreadable";
+    if (!await access(filePath).then(() => true, () => false)) {
+      return "attachment manifest path is unreadable";
+    }
   }
   const localImages = new Set(inputs.flatMap((entry) =>
     entry.type === "localImage" && typeof entry.path === "string" ? [entry.path] : [],
@@ -259,14 +302,110 @@ async function validateAttachmentInputs(value: unknown): Promise<string | undefi
   return undefined;
 }
 
-function respond(id: unknown, result: unknown): void {
-  write({ id, result });
+function respond(send: Send, id: unknown, result: unknown): void {
+  send({ id, result });
 }
 
 function notify(method: string, params: unknown): void {
-  write({ method, params });
+  for (const send of clients) send({ method, params });
 }
 
-function write(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+function fakeThread(
+  id: string,
+  name: string,
+  preview: string,
+  source: "cli" | "appServer",
+  canAcceptDirectInput: boolean,
+  cwd = "/work/shared",
+) {
+  return {
+    id,
+    name,
+    preview,
+    createdAt: 1,
+    updatedAt: Date.now() / 1_000,
+    cwd,
+    status: { type: "idle" },
+    source,
+    canAcceptDirectInput,
+  };
+}
+
+function threadEnvelope(thread: ReturnType<typeof fakeThread>, text: string) {
+  const turns = [{
+    id: `history-turn-${thread.id}`,
+    status: "completed",
+    items: [{ id: `history-message-${thread.id}`, type: "agentMessage", text }],
+  }];
+  return {
+    thread: {
+      ...thread,
+      turns,
+    },
+    initialTurnsPage: { data: turns, nextCursor: null },
+    model: "gpt-fake",
+    effort: "medium",
+    approvalPolicy: "on-request",
+    sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+    activePermissionProfile: { id: ":read-only", extends: null },
+  };
+}
+
+async function runStdio(): Promise<void> {
+  const send: Send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  clients.add(send);
+  const decoder = new TextDecoder();
+  for await (const chunk of Bun.stdin.stream()) {
+    buffer += decoder.decode(chunk, { stream: true });
+    while (true) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (line) await handle(JSON.parse(line) as Record<string, unknown>, send);
+    }
+  }
+  clients.delete(send);
+}
+
+async function runWebSocket(endpoint: string): Promise<void> {
+  const url = new URL(endpoint);
+  if (url.protocol !== "ws:" || !["127.0.0.1", "[::1]"].includes(url.hostname)) {
+    throw new Error("fake app-server listener must be loopback ws");
+  }
+  const sends = new WeakMap<object, Send>();
+  const server = Bun.serve({
+    hostname: url.hostname === "[::1]" ? "::1" : url.hostname,
+    port: Number(url.port),
+    fetch(request, server) {
+      if (server.upgrade(request)) return undefined;
+      return new Response("WebSocket required", { status: 426 });
+    },
+    websocket: {
+      open(socket) {
+        const send: Send = (value) => socket.send(JSON.stringify(value));
+        sends.set(socket, send);
+        clients.add(send);
+      },
+      message(socket, source) {
+        const send = sends.get(socket);
+        if (!send) return;
+        const text = typeof source === "string" ? source : new TextDecoder().decode(source);
+        void handle(JSON.parse(text) as Record<string, unknown>, send);
+      },
+      close(socket) {
+        const send = sends.get(socket);
+        if (send) clients.delete(send);
+        sends.delete(socket);
+      },
+    },
+  });
+  await new Promise<void>((resolve) => {
+    const stop = () => {
+      server.stop(true);
+      resolve();
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
 }

@@ -1222,7 +1222,10 @@ summary:focus-visible {
 .thread-directory__count + .thread-directory__chevron { margin-left: 0; }
 .thread-directory[open] > .thread-directory__chevron { transform: rotate(180deg); }
 .thread-row__title em { background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 4px; color: var(--accent); font-size: 7px; font-style: normal; letter-spacing: .06em; margin-left: 6px; padding: 1px 4px; vertical-align: 1px; }
+.thread-row__title em[data-tone="readonly"] { background: color-mix(in srgb, var(--warning) 10%, transparent); border-color: color-mix(in srgb, var(--warning) 28%, transparent); color: var(--warning); }
 .handoff-hint { border-top: 1px solid var(--border); color: var(--text-faint); font-size: 9.5px; margin: 0 4px; padding: 10px 5px; }
+.history-only-banner { align-items: center; background: color-mix(in srgb, var(--warning) 7%, var(--panel)); border-bottom: 1px solid color-mix(in srgb, var(--warning) 26%, var(--border)); color: var(--text-muted); display: flex; font-size: 10.5px; gap: 9px; min-height: 34px; padding: 7px 16px; }
+.history-only-banner strong { color: var(--warning); flex: 0 0 auto; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .inline-activity--changes { color: inherit; cursor: pointer; text-align: left; width: 100%; }
 .inline-activity--changes:hover { border-color: var(--border-strong); }
 .inline-activity__action { align-items: center; color: var(--blue); display: flex; font-size: 9.5px; gap: 3px; margin-top: 7px; }
@@ -1323,6 +1326,7 @@ summary:focus-visible {
   height: 27px;
   padding: 0 8px;
 }
+.approval-card__actions button:disabled { cursor: not-allowed; opacity: .45; }
 
 .approval-card__actions .button-primary { background: var(--text); border-color: var(--text); color: #171716; }
 

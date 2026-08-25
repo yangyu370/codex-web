@@ -1,8 +1,9 @@
 import path from "node:path";
 import { MAX_BROWSER_MESSAGE_BYTES } from "../shared/protocol";
 
-import { CodexAdapter } from "./app-server/adapter";
+import { CodexAdapter, type ThreadHistoryProjection } from "./app-server/adapter";
 import { AppServerProcessManager, shouldInterruptOnWebShutdown } from "./app-server/process-manager";
+import { parseWindowsSharedPolicy } from "./app-server/windows-managed-backend";
 import { parseAuthConfig } from "./auth/config";
 import { selectHostPlatform } from "./platform";
 import { createSystemRuntime } from "./platform/system-runtime";
@@ -15,6 +16,8 @@ import { LocalEventLog, secretEnvironmentValues } from "./service/local-log";
 import { AttachmentStore } from "./service/attachment-store";
 import { TurnCoordinator } from "./service/turn-coordinator";
 import { ThreadCatalogRefresher } from "./service/thread-catalog";
+import { ThreadAccessController } from "./service/thread-access";
+import { HistoryThreadRefresher } from "./service/history-thread-refresher";
 
 const hostname = "127.0.0.1";
 const port = parsePort(process.env.CODEX_WEB_PORT);
@@ -24,6 +27,9 @@ const state = new WebState(platform.kind, (type, payload) => localLog.append(typ
 const manager = new AppServerProcessManager(platform, {
   configuredExecutable: process.env.CODEX_WEB_CODEX_EXECUTABLE,
   env: environmentStrings(process.env),
+  windowsPolicy: platform.kind === "windows"
+    ? parseWindowsSharedPolicy(process.env.CODEX_WEB_WINDOWS_SHARED)
+    : undefined,
 });
 let adapter: CodexAdapter | undefined;
 const directories = new DirectoryService(
@@ -41,27 +47,78 @@ function readyAdapter(): CodexAdapter {
 
 const attachments = new AttachmentStore(platform, platform.dataDirectory());
 const coordinator = new TurnCoordinator(state, attachments, readyAdapter);
+let threadAccess: ThreadAccessController;
+const history = new HistoryThreadRefresher<ThreadHistoryProjection>({
+  read: (threadId) => readyAdapter().readThreadHistory(threadId),
+  project: (threadId, projection) => {
+    const access = state.snapshot().threadAccess;
+    if (access?.threadId !== threadId || access.mode !== "historyOnly") return;
+    readyAdapter().projectThreadHistory(projection, access, true);
+  },
+  signature: (projection) => JSON.stringify(projection),
+  retryOpen: async (threadId) => {
+    const selected = state.snapshot().threadAccess;
+    if (selected?.threadId !== threadId || selected.mode !== "historyOnly") return;
+    await threadAccess.open(threadId);
+    const current = state.snapshot().threadAccess;
+    if (current?.threadId === threadId) history.select(current);
+  },
+  onError: (error) => state.addDiagnostic(`history refresh: ${error.message}`),
+});
 const catalog = new ThreadCatalogRefresher(
   () => readyAdapter().listThreads(),
   {
     onError: (error) => state.addDiagnostic(`thread catalog refresh: ${error.message}`),
+    onUpdated: (value) => history.catalogUpdated(value.data),
   },
 );
+threadAccess = new ThreadAccessController({
+  resumeThread: (threadId, access, isCurrent) =>
+    readyAdapter().resumeThread(threadId, access, isCurrent),
+  readThread: (threadId, access, isCurrent) =>
+    readyAdapter().readThread(threadId, access, isCurrent),
+});
 
 const actions: BrowserActions = {
   listDirectory: (directory) => directories.list(directory),
   models: () => readyAdapter().models(),
   permissionProfiles: () => readyAdapter().permissionProfiles(),
   listThreads: async (cursor) => {
+    history.focus();
     if (cursor) return readyAdapter().listThreads(cursor);
     return (await catalog.refreshNow()) ?? {
       data: state.snapshot().threads,
       nextCursor: null,
     };
   },
-  startThread: (params) => readyAdapter().startThread(params),
-  resumeThread: (threadId) => readyAdapter().resumeThread(threadId),
-  readThread: (threadId) => readyAdapter().readThread(threadId),
+  startThread: async (params) => {
+    threadAccess.invalidate();
+    history.select(undefined);
+    const thread = await readyAdapter().startThread(params);
+    history.select(state.snapshot().threadAccess);
+    return thread;
+  },
+  openThread: async (threadId) => {
+    history.select(undefined);
+    const opened = await threadAccess.open(threadId);
+    const currentAccess = state.snapshot().threadAccess;
+    if (currentAccess?.threadId === threadId) history.select(currentAccess);
+    return opened;
+  },
+  resumeThread: async (threadId) => {
+    threadAccess.invalidate();
+    history.select(undefined);
+    const thread = await readyAdapter().resumeThread(threadId);
+    history.select(state.snapshot().threadAccess);
+    return thread;
+  },
+  readThread: async (threadId) => {
+    threadAccess.invalidate();
+    history.select(undefined);
+    const thread = await readyAdapter().readThread(threadId);
+    history.select(state.snapshot().threadAccess);
+    return thread;
+  },
   startTurn: (threadId, text, attachmentSessionId, taskSettings) =>
     coordinator.start(threadId, text, attachmentSessionId, taskSettings),
   interruptTurn: (threadId, turnId) => readyAdapter().interruptTurn(threadId, turnId),
@@ -76,10 +133,12 @@ const gateway = new BrowserGateway(state, actions, {
   onConnectionCountChanged(count) {
     while (browserConnections < count) {
       catalog.browserConnected();
+      history.browserConnected();
       browserConnections += 1;
     }
     while (browserConnections > count) {
       catalog.browserDisconnected();
+      history.browserDisconnected();
       browserConnections -= 1;
     }
   },
@@ -112,7 +171,10 @@ manager.onState((snapshot) => {
       loadCapability("permission profiles", () => nextAdapter.permissionProfiles()),
       loadCapability("thread catalog", () => nextAdapter.listThreads()),
       ...(loadedThreadId
-        ? [loadCapability("loaded thread", () => nextAdapter.resumeThread(loadedThreadId))]
+        ? [loadCapability("loaded thread", async () => {
+            const opened = await new ThreadAccessController(nextAdapter).open(loadedThreadId);
+            history.select(opened.access);
+          })]
         : []),
     ]).then(() => {
       if (generation !== readyGeneration || manager.snapshot().status !== "ready") return;
@@ -120,12 +182,18 @@ manager.onState((snapshot) => {
       state.setService({
         status: "ready",
         ...(snapshot.codexVersion ? { codexVersion: snapshot.codexVersion } : {}),
+        ...(snapshot.cliVersion ? { cliVersion: snapshot.cliVersion } : {}),
+        ...(snapshot.appServerVersion ? { appServerVersion: snapshot.appServerVersion } : {}),
+        ...(snapshot.restartRequired ? { restartRequired: true } : {}),
         ...(snapshot.liveHandoff ? { liveHandoff: snapshot.liveHandoff } : {}),
       });
     });
     return;
   }
   adapter = undefined;
+  threadAccess.invalidate();
+  history.select(undefined);
+  state.clearThreadAccess();
   state.interruptActiveWork();
   const diagnosticId = snapshot.error ? crypto.randomUUID() : undefined;
   if (snapshot.error && diagnosticId) {
@@ -134,6 +202,9 @@ manager.onState((snapshot) => {
   state.setService({
     status: snapshot.status,
     ...(snapshot.codexVersion ? { codexVersion: snapshot.codexVersion } : {}),
+    ...(snapshot.cliVersion ? { cliVersion: snapshot.cliVersion } : {}),
+    ...(snapshot.appServerVersion ? { appServerVersion: snapshot.appServerVersion } : {}),
+    ...(snapshot.restartRequired ? { restartRequired: true } : {}),
     ...(snapshot.liveHandoff ? { liveHandoff: snapshot.liveHandoff } : {}),
     ...(snapshot.error
       ? {
@@ -189,6 +260,7 @@ async function shutdown(): Promise<void> {
   state.interruptActiveWork();
   await manager.stop();
   catalog.close();
+  history.close();
   coordinator.close();
   await attachments.close();
   await localLog.flush();

@@ -22,6 +22,8 @@ interface ActivityPanelProps {
   activeTab?: "activity" | "changes";
   onTabChange?: (tab: "activity" | "changes") => void;
   turnDiff?: TurnDiffSummary;
+  resolveDisabled?: boolean;
+  resolveDisabledReason?: string;
 }
 
 export function ActivityPanel({
@@ -32,6 +34,8 @@ export function ActivityPanel({
   activeTab = "activity",
   onTabChange,
   turnDiff,
+  resolveDisabled = false,
+  resolveDisabledReason,
 }: ActivityPanelProps) {
   const activities = items.filter(isActivityItem);
   return (
@@ -64,6 +68,8 @@ export function ActivityPanel({
               approval={approval}
               key={approval.id}
               onResolve={onResolveApproval}
+              resolveDisabled={resolveDisabled}
+              resolveDisabledReason={resolveDisabledReason}
             />
           ))}
         </section>
@@ -87,9 +93,13 @@ export function ActivityPanel({
 function ApprovalCard({
   approval,
   onResolve,
+  resolveDisabled,
+  resolveDisabledReason,
 }: {
   approval: PendingApproval;
   onResolve?: (id: string, decision: string) => void;
+  resolveDisabled: boolean;
+  resolveDisabledReason?: string;
 }) {
   const accept = approval.availableDecisions.find((decision) =>
     ["accept", "acceptForSession", "grantTurn", "grantSession"].includes(decision),
@@ -110,14 +120,16 @@ function ApprovalCard({
       {approval.command ? <code className="approval-card__command">{approval.command}</code> : null}
       <div className="approval-card__actions">
         {decline ? (
-          <button onClick={() => onResolve?.(approval.id, decline)} type="button">
+          <button disabled={resolveDisabled} onClick={() => onResolve?.(approval.id, decline)} title={resolveDisabled ? resolveDisabledReason : "Decline this request"} type="button">
             <X size={13} /> Decline
           </button>
         ) : null}
         {accept ? (
           <button
             className="button-primary"
+            disabled={resolveDisabled}
             onClick={() => onResolve?.(approval.id, accept)}
+            title={resolveDisabled ? resolveDisabledReason : "Approve this request"}
             type="button"
           >
             <Check size={13} /> Approve

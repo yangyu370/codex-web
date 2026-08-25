@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import type { JsonRpcNotification, JsonRpcServerRequest } from "./json-rpc";
-import { CodexAdapter, type RpcClient } from "./adapter";
+import { JsonRpcResponseError, type JsonRpcNotification, type JsonRpcServerRequest } from "./json-rpc";
+import { CodexAdapter, CodexRejectedError, type RpcClient } from "./adapter";
 import {
   decodeHistoryItem,
   decodeModelList,
@@ -247,8 +247,29 @@ describe("tolerant decoders", () => {
 });
 
 describe("WebState", () => {
+  test("ignores task-scoped shared notifications until that task is selected", () => {
+    const state = new WebState("windows");
+
+    state.applyNotification({
+      method: "turn/started",
+      params: { threadId: "external-cli", turn: { id: "turn-external" } },
+    });
+    state.applyNotification({
+      method: "item/completed",
+      params: {
+        threadId: "external-cli",
+        turnId: "turn-external",
+        item: { id: "message-external", type: "agentMessage", text: "not selected" },
+      },
+    });
+
+    expect(state.snapshot().activeTurn).toBeUndefined();
+    expect(state.snapshot().visibleItems).toEqual([]);
+  });
+
   test("builds an assistant message from item start and deltas", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/started",
       params: {
@@ -275,6 +296,7 @@ describe("WebState", () => {
 
   test("bounds command output and marks truncation explicitly", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/started",
       params: {
@@ -304,6 +326,7 @@ describe("WebState", () => {
 
   test("bounds oversized content present in an initial item notification", () => {
     const state = new WebState("windows");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/started",
       params: {
@@ -351,6 +374,7 @@ describe("WebState", () => {
 
   test("interrupts active work and pending approvals after app-server exit", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "turn/started",
       params: { threadId: "t1", turn: { id: "turn1" } },
@@ -387,6 +411,7 @@ describe("WebState", () => {
 
   test("bounds live reasoning summaries", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/completed",
       params: {
@@ -603,6 +628,37 @@ describe("WebState", () => {
     });
   });
 
+  test("keeps the validated display cwd when a native update uses its canonical alias", () => {
+    const state = new WebState("macos");
+    state.setThreads([{
+      id: "t1",
+      title: "Task",
+      preview: "",
+      createdAt: 1,
+      updatedAt: 1,
+      cwd: "/var/work",
+      canAcceptDirectInput: true,
+    }]);
+    state.loadThread("t1", [], undefined, { threadId: "t1", mode: "readWrite" });
+
+    state.applyNotification({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "t1",
+          name: "Task",
+          preview: "",
+          createdAt: 1,
+          updatedAt: 2,
+          cwd: "/private/var/work",
+          canAcceptDirectInput: true,
+        },
+      },
+    });
+
+    expect(state.snapshot().threads[0]?.cwd).toBe("/var/work");
+  });
+
   test("clears stale task runtime even when reloading the same thread", () => {
     const state = new WebState("macos");
     state.loadThread("thread-a", []);
@@ -625,8 +681,21 @@ describe("WebState", () => {
     expect(state.snapshot()).not.toHaveProperty("turnDiff");
   });
 
+  test("revokes loaded write access while the app-server reconnects", () => {
+    const state = new WebState("windows");
+    state.loadThread("thread-a", [], undefined, {
+      threadId: "thread-a",
+      mode: "readWrite",
+    });
+
+    state.clearThreadAccess();
+
+    expect(state.snapshot().threadAccess).toBeUndefined();
+  });
+
   test("applies current file patch and turn error notifications", () => {
     const state = new WebState("macos");
+    state.loadThread("t1", []);
     state.applyNotification({
       method: "item/fileChange/patchUpdated",
       params: {
@@ -931,6 +1000,7 @@ describe("CodexAdapter", () => {
     ).resolves.toMatchObject({ id: "t2", cwd: "/alias/work" });
     expect(state.snapshot().threads[0]?.cwd).toBe("/alias/work");
     expect(state.snapshot().loadedThreadId).toBe("t2");
+    expect(state.snapshot().threadAccess).toEqual({ threadId: "t2", mode: "readWrite" });
   });
 
   test("loads reconstructed turns when resuming a thread", async () => {
@@ -987,6 +1057,7 @@ describe("CodexAdapter", () => {
       threadId: "t1",
       status: "inProgress",
     });
+    expect(state.snapshot().threadAccess).toEqual({ threadId: "t1", mode: "readWrite" });
   });
 
   test("reads durable thread history with includeTurns enabled", async () => {
@@ -1010,6 +1081,57 @@ describe("CodexAdapter", () => {
 
     await expect(adapter.readThread("t1")).resolves.toMatchObject({ id: "t1" });
     expect(state.snapshot().loadedThreadId).toBe("t1");
+    expect(state.snapshot().threadAccess).toEqual({
+      threadId: "t1",
+      mode: "historyOnly",
+      reason: "unsupportedSource",
+    });
+  });
+
+  test("does not emit a duplicate thread.loaded event for unchanged history", async () => {
+    const rpc = new ExpectedRpcClient("thread/read", {
+      thread: {
+        id: "t1",
+        preview: "Same history",
+        createdAt: 1,
+        updatedAt: 2,
+        turns: [],
+      },
+    });
+    const state = new WebState("windows");
+    const eventTypes: string[] = [];
+    state.onEvent((event) => eventTypes.push(event.type));
+    const adapter = new CodexAdapter(rpc, state);
+
+    await adapter.readThread("t1");
+    await adapter.readThread("t1");
+
+    expect(eventTypes.filter((type) => type === "thread.loaded")).toHaveLength(1);
+  });
+
+  test("preserves bounded native rejection metadata for internal access classification", async () => {
+    const native = new JsonRpcResponseError(
+      -32600,
+      "Thread already has an active writer",
+      { threadId: "t1" },
+    );
+    const adapter = new CodexAdapter(
+      new ExpectedRpcClient("thread/resume", native),
+      new WebState("windows"),
+    );
+
+    try {
+      await adapter.resumeThread("t1");
+      throw new Error("expected resume to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(CodexRejectedError);
+      expect((error as CodexRejectedError).native).toEqual({
+        code: -32600,
+        message: "Thread already has an active writer",
+        data: { threadId: "t1" },
+      });
+      expect((error as Error).message).toBe("codexRejected: thread/resume");
+    }
   });
 
   test("starts and interrupts a turn with exact app-server params", async () => {

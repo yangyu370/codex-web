@@ -95,6 +95,7 @@ function stateWithThread(): WebState {
     createdAt: 1,
     updatedAt: 2,
   });
+  state.loadThread("thread-1", []);
   return state;
 }
 

@@ -6,6 +6,7 @@ import type {
   PermissionProfileSummary,
   ReviewState,
   ThreadSummary,
+  ThreadAccess,
   ThreadSettingsSummary,
   VisibleItem,
 } from "../../shared/protocol";
@@ -62,6 +63,7 @@ export class WebState {
   #permissionProfiles: PermissionProfileSummary[] = [];
   #threads: ThreadSummary[] = [];
   #loadedThreadId?: string;
+  #threadAccess?: ThreadAccess;
   #activeTurn?: BrowserSnapshot["activeTurn"];
   #visibleItems: VisibleItem[] = [];
   #approvals: PendingApproval[] = [];
@@ -89,6 +91,7 @@ export class WebState {
       permissionProfiles: this.#permissionProfiles,
       threads: this.#threads,
       ...(this.#loadedThreadId ? { loadedThreadId: this.#loadedThreadId } : {}),
+      ...(this.#threadAccess ? { threadAccess: this.#threadAccess } : {}),
       ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
       visibleItems: this.#visibleItems,
       pendingApprovals: this.#approvals.filter((approval) => approval.status === "pending"),
@@ -167,18 +170,53 @@ export class WebState {
     threadId: string,
     items: VisibleItem[],
     activeTurn?: BrowserSnapshot["activeTurn"],
+    access?: ThreadAccess,
+    suppressUnchanged = false,
   ): void {
+    if (access && access.threadId !== threadId) {
+      throw new Error("invalidRequest: thread access does not match loaded task");
+    }
+    const previousItems = this.#visibleItems;
+    this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
+    this.#trimVisibleItems();
+    const unchanged = this.#loadedThreadId === threadId &&
+      sameValue(this.#visibleItems, previousItems) &&
+      sameValue(this.#activeTurn, activeTurn?.threadId === threadId ? activeTurn : undefined) &&
+      sameValue(this.#threadAccess, access);
+    if (suppressUnchanged && unchanged) {
+      this.#visibleItems = previousItems;
+      return;
+    }
     this.#threadSettings = undefined;
     this.#review = undefined;
     this.#turnDiff = undefined;
     this.#tokenUsage = undefined;
     this.interruptApprovals();
     this.#loadedThreadId = threadId;
+    this.#threadAccess = access;
     this.#activeTurn = activeTurn?.threadId === threadId ? activeTurn : undefined;
-    this.#visibleItems = items.slice(-MAX_VISIBLE_ITEMS);
-    this.#trimVisibleItems();
     this.#emit("thread.loaded", {
       threadId,
+      items: this.#visibleItems,
+      ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
+      ...(this.#threadAccess ? { threadAccess: this.#threadAccess } : {}),
+    });
+  }
+
+  setThreadAccess(access: ThreadAccess): void {
+    if (access.threadId !== this.#loadedThreadId) {
+      throw new Error("invalidRequest: thread access does not match loaded task");
+    }
+    this.#threadAccess = access;
+    this.#emit("thread.access.updated", { threadAccess: access });
+  }
+
+  clearThreadAccess(): void {
+    if (!this.#threadAccess) return;
+    this.#threadAccess = undefined;
+    if (!this.#loadedThreadId) return;
+    this.#emit("thread.loaded", {
+      threadId: this.#loadedThreadId,
       items: this.#visibleItems,
       ...(this.#activeTurn ? { activeTurn: this.#activeTurn } : {}),
     });
@@ -189,7 +227,7 @@ export class WebState {
       const params = record(notification.params, `${notification.method}.params`);
       if (isTaskScopedNotification(notification.method)) {
         const threadId = optionalString(params.threadId);
-        if (!threadId || (this.#loadedThreadId && threadId !== this.#loadedThreadId)) return;
+        if (!threadId || threadId !== this.#loadedThreadId) return;
       }
       let changedThread: ThreadSummary | undefined;
       switch (notification.method) {
@@ -399,12 +437,19 @@ export class WebState {
 
   canAcceptDirectInput(threadId: string): boolean {
     return this.#loadedThreadId === threadId &&
+      this.#threadAccess?.threadId === threadId &&
+      this.#threadAccess.mode === "readWrite" &&
       this.#threads.find((thread) => thread.id === threadId)?.canAcceptDirectInput === true;
   }
 
   #upsertThread(thread: ThreadSummary): void {
-    const bounded = boundThread(thread)[0];
-    if (!bounded) return;
+    const candidate = boundThread(thread)[0];
+    if (!candidate) return;
+    let bounded: ThreadSummary = candidate;
+    const loaded = this.#loadedThreadId === bounded.id
+      ? this.#threads.find((entry) => entry.id === bounded.id)
+      : undefined;
+    if (loaded?.cwd) bounded = { ...bounded, cwd: loaded.cwd };
     this.#threads = [bounded, ...this.#threads.filter((entry) => entry.id !== bounded.id)].slice(0, MAX_CATALOG_ENTRIES);
   }
 
@@ -638,6 +683,10 @@ export class WebState {
       listener(event);
     }
   }
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function approvalKind(method: string): PendingApproval["kind"] {

@@ -1,10 +1,13 @@
-import path from "node:path";
-
 import type { AppServerProcess, HostPlatform } from "../platform";
-import { startManagedDaemon, type DaemonConnectionInfo } from "./daemon";
+import type { DaemonConnectionInfo } from "./daemon";
 import { createJsonlTransport } from "./jsonl-transport";
 import { JsonRpcPeer, type JsonRpcTransport } from "./json-rpc";
-import { connectUnixWebSocket } from "./unix-websocket-transport";
+import {
+  selectSharedAppServerBackend,
+  type SharedAppServerBackend,
+  type SharedBackendKind,
+  type WindowsSharedPolicy,
+} from "./shared-backend";
 
 const STDERR_CAP_BYTES = 262_144;
 const RESTART_DELAYS_MS = [250, 1_000, 4_000, 10_000] as const;
@@ -19,8 +22,12 @@ export type AppServerStatus =
 export interface AppServerProcessSnapshot {
   status: AppServerStatus;
   codexVersion?: string;
+  cliVersion?: string;
+  appServerVersion?: string;
+  restartRequired?: boolean;
   error?: string;
-  mode?: "daemon" | "embedded";
+  mode?: "shared" | "embedded";
+  sharedBackend?: SharedBackendKind;
   liveHandoff?: "available" | "unavailable";
 }
 
@@ -34,21 +41,25 @@ export interface AppServerProcessManagerOptions {
     codexHome: string,
   ) => Promise<DaemonConnectionInfo>;
   daemonConnect?: (socketPath: string) => Promise<JsonRpcTransport>;
+  sharedBackend?: SharedAppServerBackend;
+  windowsPolicy?: WindowsSharedPolicy;
 }
 
 export function shouldInterruptOnWebShutdown(snapshot: AppServerProcessSnapshot): boolean {
-  return snapshot.mode !== "daemon";
+  return snapshot.mode !== "shared";
 }
 
 export class AppServerProcessManager {
   readonly #platform: HostPlatform;
   readonly #options: AppServerProcessManagerOptions;
+  readonly #sharedBackend?: SharedAppServerBackend;
+  readonly #sharedRequired: boolean;
   readonly #stateListeners = new Set<(state: AppServerProcessSnapshot) => void>();
   #snapshot: AppServerProcessSnapshot = { status: "starting" };
   #child?: AppServerProcess;
   #peer?: JsonRpcPeer;
-  #daemonTransport?: JsonRpcTransport;
-  #unsubscribeDaemonClose?: () => void;
+  #sharedTransport?: JsonRpcTransport;
+  #unsubscribeSharedClose?: () => void;
   #intentionalShutdown = false;
   #restartAttempt = 0;
   #stderrChunks: Uint8Array[] = [];
@@ -59,6 +70,16 @@ export class AppServerProcessManager {
   constructor(platform: HostPlatform, options: AppServerProcessManagerOptions = {}) {
     this.#platform = platform;
     this.#options = options;
+    this.#sharedRequired = platform.kind === "windows" && options.windowsPolicy === "required";
+    this.#sharedBackend = options.sharedBackend ?? selectSharedAppServerBackend(
+      platform,
+      {
+        env: options.env ?? {},
+        windowsPolicy: options.windowsPolicy,
+        daemonStart: options.daemonStart,
+        daemonConnect: options.daemonConnect,
+      },
+    );
   }
 
   start(): Promise<JsonRpcPeer> {
@@ -74,6 +95,7 @@ export class AppServerProcessManager {
           status: "unavailable",
           error: error instanceof Error ? error.message : String(error),
           mode: this.#platform.kind === "windows" ? "embedded" : this.#snapshot.mode,
+          sharedBackend: this.#snapshot.sharedBackend,
           liveHandoff: "unavailable",
         });
       }
@@ -112,11 +134,11 @@ export class AppServerProcessManager {
     this.#intentionalShutdown = true;
     this.#startPromise = undefined;
     const child = this.#child;
-    this.#unsubscribeDaemonClose?.();
-    this.#unsubscribeDaemonClose = undefined;
+    this.#unsubscribeSharedClose?.();
+    this.#unsubscribeSharedClose = undefined;
     this.#peer?.close(new Error("app-server stopped"));
     this.#peer = undefined;
-    this.#daemonTransport = undefined;
+    this.#sharedTransport = undefined;
     this.#child = undefined;
     if (child) {
       const exitedGracefully = await Promise.race([
@@ -130,7 +152,10 @@ export class AppServerProcessManager {
     this.#setSnapshot({
       status: "unavailable",
       codexVersion: this.#snapshot.codexVersion,
+      cliVersion: this.#snapshot.cliVersion,
+      appServerVersion: this.#snapshot.appServerVersion,
       mode: this.#snapshot.mode,
+      sharedBackend: this.#snapshot.sharedBackend,
       liveHandoff: "unavailable",
     });
   }
@@ -142,59 +167,50 @@ export class AppServerProcessManager {
     const codexVersion = await (this.#options.version ?? readCodexVersion)(
       executable,
     );
-    let daemonFailure: string | undefined;
-    if (this.#platform.kind === "macos") {
+    let sharedFailure: string | undefined;
+    if (this.#sharedBackend) {
       try {
-        return await this.#launchDaemon(executable, codexVersion);
+        return await this.#launchShared(executable, codexVersion);
       } catch (error) {
-        daemonFailure = error instanceof Error ? error.message : String(error);
-        this.#unsubscribeDaemonClose?.();
-        this.#unsubscribeDaemonClose = undefined;
-        this.#peer?.close(new Error("shared daemon initialization failed"));
+        sharedFailure = error instanceof Error ? error.message : String(error);
+        this.#unsubscribeSharedClose?.();
+        this.#unsubscribeSharedClose = undefined;
+        this.#peer?.close(new Error("shared app-server initialization failed"));
         this.#peer = undefined;
-        this.#daemonTransport = undefined;
+        this.#sharedTransport = undefined;
+        if (this.#sharedRequired) throw error;
       }
     }
-    return this.#launchEmbedded(executable, codexVersion, daemonFailure);
+    return this.#launchEmbedded(executable, codexVersion, sharedFailure);
   }
 
-  async #launchDaemon(executable: string, codexVersion: string): Promise<JsonRpcPeer> {
-    const codexHome = this.#options.env?.CODEX_HOME
-      ?? path.posix.join(this.#platform.homeDirectory(), ".codex");
-    const startDaemon = this.#options.daemonStart
-      ?? ((resolvedExecutable: string, resolvedCodexHome: string) => startManagedDaemon(
-        resolvedExecutable,
-        resolvedCodexHome,
-        {
-          spawn: (command, environment) => this.#platform.spawnCommand(
-            command,
-            {
-              ...environment,
-              ...this.#options.env,
-              CODEX_HOME: resolvedCodexHome,
-            },
-          ),
-        },
-      ));
-    const daemon = await startDaemon(executable, codexHome);
-    const transport = await (this.#options.daemonConnect ?? connectUnixWebSocket)(
-      daemon.socketPath,
-    );
+  async #launchShared(executable: string, cliVersion: string): Promise<JsonRpcPeer> {
+    const connection = await this.#sharedBackend!.ensureAndConnect({
+      executable,
+      cliVersion,
+      env: this.#options.env ?? {},
+    });
+    const { transport, info } = connection;
     const peer = new JsonRpcPeer(transport);
     this.#peer = peer;
     await this.#initialize(peer);
-    this.#daemonTransport = transport;
-    this.#unsubscribeDaemonClose = transport.onClose((reason) => {
-      void this.#handleDaemonClose(
+    this.#sharedTransport = transport;
+    this.#unsubscribeSharedClose = transport.onClose((reason) => {
+      void this.#handleSharedClose(
         transport,
-        reason ?? new Error("shared daemon connection closed"),
+        reason ?? new Error("shared app-server connection closed"),
       );
     });
     this.#restartAttempt = 0;
+    const appServerVersion = info.appServerVersion ?? cliVersion;
     this.#setSnapshot({
       status: "ready",
-      codexVersion,
-      mode: "daemon",
+      codexVersion: appServerVersion,
+      cliVersion,
+      appServerVersion,
+      ...(info.restartRequired ? { restartRequired: true } : {}),
+      mode: "shared",
+      sharedBackend: info.backend,
       liveHandoff: "available",
     });
     return peer;
@@ -203,7 +219,7 @@ export class AppServerProcessManager {
   async #launchEmbedded(
     executable: string,
     codexVersion: string,
-    daemonFailure?: string,
+    sharedFailure?: string,
   ): Promise<JsonRpcPeer> {
     try {
       const child = this.#platform.spawnAppServer(
@@ -221,9 +237,11 @@ export class AppServerProcessManager {
       this.#setSnapshot({
         status: "ready",
         codexVersion,
+        cliVersion: codexVersion,
+        appServerVersion: codexVersion,
         mode: "embedded",
         liveHandoff: "unavailable",
-        ...(daemonFailure ? { error: daemonFailure } : {}),
+        ...(sharedFailure ? { error: sharedFailure } : {}),
       });
       return peer;
     } catch (error) {
@@ -238,6 +256,7 @@ export class AppServerProcessManager {
       this.#setSnapshot({
         status: "unavailable",
         error: error instanceof Error ? error.message : String(error),
+        cliVersion: codexVersion,
         mode: "embedded",
         liveHandoff: "unavailable",
       });
@@ -264,6 +283,8 @@ export class AppServerProcessManager {
     this.#setSnapshot({
       status: "restarting",
       codexVersion: this.#snapshot.codexVersion,
+      cliVersion: this.#snapshot.cliVersion,
+      appServerVersion: this.#snapshot.appServerVersion,
       error: `app-server exited with code ${exitCode}`,
       mode: "embedded",
       liveHandoff: "unavailable",
@@ -276,21 +297,24 @@ export class AppServerProcessManager {
     await this.#restartPromise;
   }
 
-  async #handleDaemonClose(
+  async #handleSharedClose(
     transport: JsonRpcTransport,
     reason: Error,
   ): Promise<void> {
-    if (this.#intentionalShutdown || transport !== this.#daemonTransport) return;
-    this.#unsubscribeDaemonClose?.();
-    this.#unsubscribeDaemonClose = undefined;
-    this.#daemonTransport = undefined;
+    if (this.#intentionalShutdown || transport !== this.#sharedTransport) return;
+    this.#unsubscribeSharedClose?.();
+    this.#unsubscribeSharedClose = undefined;
+    this.#sharedTransport = undefined;
     this.#peer = undefined;
     this.#startPromise = undefined;
     this.#setSnapshot({
       status: "restarting",
       codexVersion: this.#snapshot.codexVersion,
+      cliVersion: this.#snapshot.cliVersion,
+      appServerVersion: this.#snapshot.appServerVersion,
       error: reason.message,
-      mode: "daemon",
+      mode: "shared",
+      sharedBackend: this.#snapshot.sharedBackend,
       liveHandoff: "available",
     });
     if (!this.#restartPromise) {
@@ -310,8 +334,11 @@ export class AppServerProcessManager {
       this.#setSnapshot({
         status: "restarting",
         codexVersion: this.#snapshot.codexVersion,
+        cliVersion: this.#snapshot.cliVersion,
+        appServerVersion: this.#snapshot.appServerVersion,
         error: this.#snapshot.error,
         mode: this.#snapshot.mode,
+        sharedBackend: this.#snapshot.sharedBackend,
         liveHandoff: this.#snapshot.liveHandoff,
       });
       this.#startPromise = this.#launch();
